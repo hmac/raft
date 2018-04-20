@@ -1,9 +1,10 @@
-module Lib
-    ( someFunc
-    ) where
+{-# LANGUAGE StandaloneDeriving #-}
+
+module Lib where
 
 import           Data.Maybe
-import           Prelude    hiding (log)
+import           Debug.Trace (trace)
+import           Prelude     hiding (log)
 
 someFunc :: IO ()
 someFunc = putStrLn "someFunc"
@@ -14,27 +15,37 @@ data LogEntry a = LogEntry
   , eCommand :: a
   }
 
-newtype Term = Term { unTerm :: Int } deriving (Eq, Ord)
+deriving instance (Show a) => Show (LogEntry a)
+
+newtype Term = Term { unTerm :: Int } deriving (Eq, Ord, Show)
 
 -- needs to be 1-indexed - maybe use something other than a list?
 type Log a = [LogEntry a]
 type LogIndex = Int
 type ServerId = Int
+type Tock = Int
 
 data ServerState a = ServerState
   -- latest term server has seen (initialised to 0, increases monotonically)
-  { sCurrentTerm :: Term
-  -- Candidate ID that received vote in current term (or None)
-  , sVotedFor    :: Maybe ServerId
+  { sCurrentTerm     :: Term
+  -- Candidate ID that received vote in current term (or Nothing)
+  , sVotedFor        :: Maybe ServerId
   -- log entries (first index is 1)
-  , sLog         :: Log a
+  , sLog             :: Log a
   -- index of highest log entry known to be committed (initialised to 0,
   -- increases monotonically)
-  , sCommitIndex :: LogIndex
+  , sCommitIndex     :: LogIndex
   -- index of highest log entry applied to state machine (initialised to 0,
   -- increases monotonically)
-  , sLastApplied :: LogIndex
+  , sLastApplied     :: LogIndex
+  -- an arbitrary counter used for timeouts (initialised to 0, increases
+  -- monotonically)
+  , sTock            :: Tock
+  -- value of sTock at which server becomes candidate
+  , sElectionTimeout :: Tock
   }
+
+deriving instance (Show a) => Show (ServerState a)
 
 data LeaderState = LeaderState
   -- for each server, index of the next log entry to send to that server
@@ -60,6 +71,8 @@ data AppendEntries a = AppendEntries
   , aeLeaderCommit :: LogIndex
   }
 
+deriving instance (Show a) => Show (AppendEntries a)
+
 data RequestVote a = RequestVote
   -- candidate's term
   { rvTerm         :: Term
@@ -71,21 +84,38 @@ data RequestVote a = RequestVote
   , rvLastLogTerm  :: Term
   }
 
-data RpcReq a = RpcAppendEntries (AppendEntries a) | RpcRequestVote (RequestVote a)
-data RpcRes = RpcRes Term Bool
+deriving instance (Show a) => Show (RequestVote a)
 
-handleRpc :: ServerState a -> RpcReq a -> (ServerState a, RpcRes)
-handleRpc s (RpcAppendEntries r) = let (success, s') = handleAppendEntries s r
-                                    in (s', RpcRes (sCurrentTerm s') success)
-handleRpc s (RpcRequestVote r)   = let (voteGranted, s') = handleRequestVote s r
-                                    in (s', RpcRes (sCurrentTerm s') voteGranted)
+data Rpc a = AppendEntriesReq (AppendEntries a)
+           | AppendEntriesRes (Term, Bool)
+           | RequestVoteReq (RequestVote a)
+           | RequestVoteRes (Term, Bool)
 
-handleAppendEntries :: ServerState a -> AppendEntries a -> (Bool, ServerState a)
+deriving instance (Show a) => Show (Rpc a)
+
+handleRpc :: ServerState a -> Rpc a -> (ServerState a, Rpc a)
+handleRpc s (AppendEntriesReq r) = let (success, s', reason) = handleAppendEntries s r
+                                       s'' = trace reason (checkIfFollower s' r)
+                                       s''' = s'' { sTock = 0 }
+                                    in (s''', AppendEntriesRes (sCurrentTerm s''', success))
+                                   where checkIfFollower s r = if aeTerm r > sCurrentTerm s
+                                                                  then s { sCurrentTerm = aeTerm r }
+                                                                  else s
+handleRpc s (AppendEntriesRes (term, success)) = undefined
+handleRpc s (RequestVoteReq r)   = let (voteGranted, s') = handleRequestVote s r
+                                       s'' = checkIfFollower s r
+                                    in (s'', RequestVoteRes (sCurrentTerm s', voteGranted))
+                                   where checkIfFollower s r = if rvTerm r > sCurrentTerm s
+                                                                  then s { sCurrentTerm = rvTerm r }
+                                                                  else s
+handleRpc s (RequestVoteRes (term, voteGranted)) = undefined
+
+handleAppendEntries :: ServerState a -> AppendEntries a -> (Bool, ServerState a, String)
 -- reply false if term < currentTerm
-handleAppendEntries s r | aeTerm r < sCurrentTerm s = (False, s)
+handleAppendEntries s r | aeTerm r < sCurrentTerm s = (False, s, "term < currentTerm")
 -- reply false if log doesn't contain an entry at prevLogIndex whose term
 -- matches prevLogTerm
-handleAppendEntries s r | isNothing (findEntry (sLog s) (aePrevLogIndex r) (aePrevLogTerm r)) = (False, s)
+handleAppendEntries s r | isNothing (findEntry (sLog s) (aePrevLogIndex r) (aePrevLogTerm r)) = (False, s, "no entry found")
 -- apply entries to the log
 -- if leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of
 -- last new entry)
@@ -95,7 +125,7 @@ handleAppendEntries s r =
                         then min (aeLeaderCommit r) (eIndex (last log'))
                         else sCommitIndex s
       s' = s { sLog = log', sCommitIndex = commitIndex' }
-  in (True, s')
+  in (True, s', "success")
 
 -- - if an existing entry conflicts with a new one (same index, different terms),
 --   delete the existing entry and all that follow it
@@ -131,25 +161,28 @@ findEntry l i t = case findByIndex l i of
                                          else Nothing
 
 findByIndex :: Log a -> LogIndex -> Maybe (LogEntry a)
-findByIndex l i | i < 0 = Nothing
+findByIndex _ i | i < 0 = Nothing
 findByIndex l i | i > length l = Nothing
-findByIndex l i = Just $ l !! (i - 1)
+findByIndex l i = Just $ l !! i
 
 data Message a =
-    RecvRpc (RpcReq a)
-  | SendRpc RpcRes
+    RecvRpc (Rpc a)
+  | SendRpc (Rpc a)
   | Tick
   | Apply (LogEntry a)
 
-handleEvent :: ServerState a -> Message a -> (ServerState a, [Message a])
-handleEvent s (RecvRpc rpc) = let (s', res) = handleRpc s rpc
-                               in (s', [SendRpc res])
-handleEvent s (SendRpc rpc) = (s, [SendRpc rpc])
-handleEvent s Tick = let lastApplied = sLastApplied s
-                         lastApplied' = lastApplied + 1
-                         commitIndex = sCommitIndex s
-                         log = sLog s
-                         entry = fromJust $ findByIndex log lastApplied'
-                      in if commitIndex > lastApplied
-                            then (s { sLastApplied = lastApplied' }, [Apply entry])
-                            else (s, [])
+deriving instance Show a => Show (Message a)
+
+handleMessage :: ServerState a -> Message a -> (ServerState a, [Message a])
+handleMessage s (RecvRpc rpc) = let (s', res) = handleRpc s rpc
+                                in (s', [SendRpc res])
+handleMessage s (SendRpc rpc) = (s, [SendRpc rpc])
+handleMessage s Tick = let lastApplied = sLastApplied s
+                           lastApplied' = lastApplied + 1
+                           commitIndex = sCommitIndex s
+                           log = sLog s
+                           entry = fromJust $ findByIndex log lastApplied'
+                           tock' = sTock s + 1
+                       in if commitIndex > lastApplied
+                             then (s { sLastApplied = lastApplied', sTock = tock' }, [Apply entry])
+                             else (s { sTock = tock' }, [])
