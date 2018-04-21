@@ -2,9 +2,11 @@
 
 module Lib where
 
+import           Control.Monad.State.Strict
+import           Data.Functor.Identity
 import           Data.Maybe
-import           Debug.Trace (trace)
-import           Prelude     hiding (log)
+import           Debug.Trace                (trace)
+import           Prelude                    hiding (log)
 
 someFunc :: IO ()
 someFunc = putStrLn "someFunc"
@@ -93,39 +95,47 @@ data Rpc a = AppendEntriesReq (AppendEntries a)
 
 deriving instance (Show a) => Show (Rpc a)
 
-handleRpc :: ServerState a -> Rpc a -> (ServerState a, Rpc a)
-handleRpc s (AppendEntriesReq r) = let (success, s', reason) = handleAppendEntries s r
-                                       s'' = trace reason (checkIfFollower s' r)
-                                       s''' = s'' { sTock = 0 }
-                                    in (s''', AppendEntriesRes (sCurrentTerm s''', success))
-                                   where checkIfFollower s r = if aeTerm r > sCurrentTerm s
-                                                                  then s { sCurrentTerm = aeTerm r }
-                                                                  else s
-handleRpc s (AppendEntriesRes (term, success)) = undefined
-handleRpc s (RequestVoteReq r)   = let (voteGranted, s') = handleRequestVote s r
-                                       s'' = checkIfFollower s r
-                                    in (s'', RequestVoteRes (sCurrentTerm s', voteGranted))
-                                   where checkIfFollower s r = if rvTerm r > sCurrentTerm s
-                                                                  then s { sCurrentTerm = rvTerm r }
-                                                                  else s
-handleRpc s (RequestVoteRes (term, voteGranted)) = undefined
+type ServerM a = State (ServerState a)
 
-handleAppendEntries :: ServerState a -> AppendEntries a -> (Bool, ServerState a, String)
--- reply false if term < currentTerm
-handleAppendEntries s r | aeTerm r < sCurrentTerm s = (False, s, "term < currentTerm")
--- reply false if log doesn't contain an entry at prevLogIndex whose term
--- matches prevLogTerm
-handleAppendEntries s r | isNothing (findEntry (sLog s) (aePrevLogIndex r) (aePrevLogTerm r)) = (False, s, "no entry found")
--- apply entries to the log
--- if leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of
--- last new entry)
-handleAppendEntries s r =
-  let log' = appendEntries (sLog s) (aeEntries r)
-      commitIndex' = if aeLeaderCommit r > sCommitIndex s
-                        then min (aeLeaderCommit r) (eIndex (last log'))
-                        else sCommitIndex s
-      s' = s { sLog = log', sCommitIndex = commitIndex' }
-  in (True, s', "success")
+handleRpcM :: Rpc a -> ServerM a (Rpc a)
+handleRpcM (AppendEntriesReq r) = do
+  s <- get
+  (success, reason) <- handleAppendEntriesM r
+  trace reason put s { sTock = 0 }
+  when (aeTerm r > sCurrentTerm s) (put s { sCurrentTerm = aeTerm r })
+  pure (AppendEntriesRes (sCurrentTerm s, success))
+handleRpcM (AppendEntriesRes _) = undefined
+handleRpcM (RequestVoteReq r) = do
+  s <- get
+  voteGranted <- handleRequestVoteM r
+  when (rvTerm r > sCurrentTerm s) (put s { sCurrentTerm = rvTerm r })
+  pure (RequestVoteRes (sCurrentTerm s, voteGranted))
+handleRpcM (RequestVoteRes _) = undefined
+
+
+handleAppendEntriesM :: AppendEntries a -> ServerM a (Bool, String)
+handleAppendEntriesM r = do
+  s <- get
+  let log = sLog s
+      commitIndex = sCommitIndex s
+      currentTerm = sCurrentTerm s
+  -- reply false if term < currentTerm
+  if aeTerm r < currentTerm
+     then pure (False, "term < currentTerm")
+     -- reply false if log doesn't contain an entry at prevLogIndex whose term
+     -- matches prevLogTerm
+     else case findEntry log (aePrevLogIndex r) (aePrevLogTerm r) of
+            Nothing -> pure (False, "no entry found")
+            -- apply entries to the log
+            -- if leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of
+            -- last new entry)
+            Just _ -> let log' = appendEntries log (aeEntries r)
+                          commitIndex' = if aeLeaderCommit r > commitIndex
+                                            then min (aeLeaderCommit r) (eIndex (last log'))
+                                            else commitIndex
+                      in do
+                        put s { sLog = log', sCommitIndex = commitIndex' }
+                        pure (True, "success")
 
 -- - if an existing entry conflicts with a new one (same index, different terms),
 --   delete the existing entry and all that follow it
@@ -140,17 +150,23 @@ appendEntries (l:ls) (e:es) = case compare (eIndex l) (eIndex e) of
                                         else l : appendEntries ls es
                                GT -> e:es
 
-handleRequestVote :: ServerState a -> RequestVote a -> (Bool, ServerState a)
--- reply false if term < currentTerm
-handleRequestVote s r | rvTerm r < sCurrentTerm s = (False, s)
--- if votedFor is null or candidateId, and candidate's log is at least as
--- up-to-date as receiver's log, grant vote
-handleRequestVote s r = if (isNothing (sVotedFor s) || matchingVote) && logUpToDate
-                           then (True, s { sVotedFor = Just (rvCandidateId r) })
-                           else (False, s)
-                             where matchingVote = sVotedFor s == Just (rvCandidateId r)
-                                   -- N.B. is this the right way to determine up-to-date?
-                                   logUpToDate = rvLastLogIndex r >= sCommitIndex s
+handleRequestVoteM :: RequestVote a -> ServerM a Bool
+handleRequestVoteM r = do
+  s <- get
+  let currentTerm = sCurrentTerm s
+      votedFor = sVotedFor s
+      commitIndex = sCommitIndex s
+      matchingVote = votedFor == Just (rvCandidateId r)
+      -- N.B. is this the right way to determine up-to-date?
+      logUpToDate = rvLastLogIndex r >= commitIndex
+  -- reply false if term < currentTerm
+  if rvTerm r < currentTerm
+     then pure False
+     -- if votedFor is null or candidateId, and candidate's log is at least as
+     -- up-to-date as receiver's log, grant vote
+     else if (isNothing votedFor || matchingVote) && logUpToDate
+     then put s { sVotedFor = Just (rvCandidateId r) } >> pure True
+     else pure False
 
 
 findEntry :: Log a -> LogIndex -> Term -> Maybe (LogEntry a)
@@ -174,7 +190,7 @@ data Message a =
 deriving instance Show a => Show (Message a)
 
 handleMessage :: ServerState a -> Message a -> (ServerState a, [Message a])
-handleMessage s (RecvRpc rpc) = let (s', res) = handleRpc s rpc
+handleMessage s (RecvRpc rpc) = let (res, s') = runState (handleRpcM rpc) s
                                 in (s', [SendRpc res])
 handleMessage s (SendRpc rpc) = (s, [SendRpc rpc])
 handleMessage s Tick = let lastApplied = sLastApplied s
