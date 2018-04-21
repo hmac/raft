@@ -1,3 +1,4 @@
+import           Control.Monad.State.Strict
 import           Lib
 
 data Command = NoOp deriving (Eq, Show)
@@ -17,7 +18,7 @@ main = do
         , aeLeaderCommit = 0
         }
       m1 = RecvRpc (AppendEntriesReq a)
-      (s1', msgs) = handleMessage s1 m1
+      (msgs, s1') = runState (handleMessageM m1) s1
   putStrLn "server state:"
   print s1'
   putStrLn "message:"
@@ -27,7 +28,7 @@ main = do
   putStrLn "new state:"
   print s1'
   putStrLn "sending response to m2"
-  let (s2', msgs2) = handleMessage s2 (head msgs)
+  let (msgs2, s2') = runState (handleMessageM (head msgs)) s2
   putStrLn "response:"
   mapM_ print msgs2
   putStrLn "new state:"

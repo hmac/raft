@@ -189,16 +189,20 @@ data Message a =
 
 deriving instance Show a => Show (Message a)
 
-handleMessage :: ServerState a -> Message a -> (ServerState a, [Message a])
-handleMessage s (RecvRpc rpc) = let (res, s') = runState (handleRpcM rpc) s
-                                in (s', [SendRpc res])
-handleMessage s (SendRpc rpc) = (s, [SendRpc rpc])
-handleMessage s Tick = let lastApplied = sLastApplied s
-                           lastApplied' = lastApplied + 1
-                           commitIndex = sCommitIndex s
-                           log = sLog s
-                           entry = fromJust $ findByIndex log lastApplied'
-                           tock' = sTock s + 1
-                       in if commitIndex > lastApplied
-                             then (s { sLastApplied = lastApplied', sTock = tock' }, [Apply entry])
-                             else (s { sTock = tock' }, [])
+handleMessageM :: Message a -> ServerM a [Message a]
+handleMessageM (RecvRpc rpc) = do
+  res <- handleRpcM rpc
+  pure [SendRpc res]
+handleMessageM (SendRpc rpc) = pure [SendRpc rpc]
+handleMessageM Tick = do
+  s <- get
+  put s { sTock = sTock s + 1 }
+  let lastApplied = sLastApplied s
+      commitIndex = sCommitIndex s
+      log = sLog s
+      entry = fromJust $ findByIndex log (lastApplied + 1)
+   in if commitIndex > lastApplied
+         then do
+           put s { sLastApplied = lastApplied + 1 }
+           pure [Apply entry]
+         else pure []
