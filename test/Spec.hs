@@ -1,48 +1,74 @@
+import           Control.Monad.Identity
 import           Control.Monad.State.Strict
-import           Lib
+import           Data.Foldable              (foldl')
+import qualified Data.Map.Strict            as Map
 
-data Command = NoOp deriving (Eq, Show)
+import           Raft
+import           Raft.Log
+import           Raft.Rpc
+import           Raft.Server
+
+data Command a b =
+    NoOp
+  | Set a b
+  deriving (Eq, Show)
+
+newtype StateMachine a b = StateMachine { smMap :: [(a, b)] }
+  deriving (Eq, Show)
+
+type StateMachineM a b = StateT (StateMachine a b) Identity
+
+apply :: Command a b -> StateMachineM a b ()
+apply NoOp = pure ()
+apply (Set k v) = do
+  machineMap <- gets smMap
+  (put . StateMachine) $ (k, v) : machineMap
 
 main :: IO ()
 main = do
-  let t0 = Term { unTerm = 0 }
-      s1 = mkServer 5
-      s2 = mkServer 5
-      entry = LogEntry { eIndex = 1, eTerm = t0, eCommand = NoOp }
-      a = AppendEntries
-        { aeTerm = t0
-        , aeLeaderId = 1
-        , aePrevLogIndex = 0
-        , aePrevLogTerm = t0
-        , aeEntries = [entry]
-        , aeLeaderCommit = 0
-        }
-      m1 = RecvRpc (AppendEntriesReq a)
-      (msgs, s1') = runState (handleMessageM m1) s1
-  putStrLn "server state:"
-  print s1'
-  putStrLn "message:"
-  print m1
-  putStrLn "response:"
-  mapM_ print msgs
-  putStrLn "new state:"
-  print s1'
-  putStrLn "sending response to m2"
-  let (msgs2, s2') = runState (handleMessageM (head msgs)) s2
-  putStrLn "response:"
-  mapM_ print msgs2
-  putStrLn "new state:"
-  print s2'
-  putStrLn "tests finished"
+  let s0 :: (ServerState (Command String Int), StateMachine String Int)
+      s0 = mkServer 0 [1, 2] 3
+      s1 = mkServer 1 [0, 2] 3
+      s2 = mkServer 2 [0, 1] 3
+      servers = Map.insert 2 s2 $ Map.insert 1 s1 $ Map.insert 0 s0 Map.empty
+  testLoop servers
 
-mkServer :: Int -> ServerState Command
-mkServer electionTimeout = ServerState
-  { sCurrentTerm = t0
-  , sVotedFor = Nothing
-  , sLog = [LogEntry { eIndex = 0, eTerm = t0, eCommand = NoOp }]
-  , sCommitIndex = 0
-  , sLastApplied = 0
-  , sTock = 0
-  , sElectionTimeout = electionTimeout
-  }
-    where t0 = Term { unTerm = 0 }
+testLoop :: Map.Map ServerId (ServerState (Command String Int), StateMachine String Int) -> IO ()
+testLoop s = go s [Tick 0, Tick 0, Tick 0, Tick 0, Tick 0, ClientRequest 0 (Set "foo" 42)]
+  where go :: Map.Map ServerId (ServerState (Command String Int), StateMachine String Int) -> [Message (Command String Int)] -> IO ()
+        go servers [] = putStrLn "finished."
+        go servers (msg:queue) = do
+          let recipient = case msg of
+                            Tick to                   -> to
+                            AppendEntriesReq _ to _   -> to
+                            (AppendEntriesRes _ to _) -> to
+                            (RequestVoteReq _ to _)   -> to
+                            (RequestVoteRes _ to _)   -> to
+                            (ClientRequest to _)      -> to
+              (state, machine) = servers Map.! recipient
+              ((msgs, state'), machine') = runState (runStateT (handleMessageM apply msg) state) machine
+              servers' = Map.insert recipient (state', machine') servers
+          print msg
+          print state'
+          print machine'
+          go servers' (queue ++ msgs)
+
+mkServer :: Int -> [ServerId] -> Int -> (ServerState (Command a b), StateMachine a b)
+mkServer serverId otherServerIds electionTimeout = (serverState, StateMachine { smMap = [] })
+  where t0 = Term { unTerm = 0 }
+        initialMap :: Map.Map ServerId Int
+        initialMap = foldl' (\m sid -> Map.insert sid 0 m) Map.empty otherServerIds
+        serverState = ServerState { sId = serverId
+                                  , sRole = Follower
+                                  , sServerIds = otherServerIds
+                                  , sCurrentTerm = t0
+                                  , sVotedFor = Nothing
+                                  , sLog = [LogEntry { eIndex = 0, eTerm = t0, eCommand = NoOp }]
+                                  , sCommitIndex = 0
+                                  , sLastApplied = 0
+                                  , sTock = 0
+                                  , sElectionTimeout = electionTimeout
+                                  , sNextIndex = initialMap
+                                  , sMatchIndex = initialMap
+                                  , sVotesReceived = 0 }
+
