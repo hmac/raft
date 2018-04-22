@@ -1,7 +1,8 @@
 import           Control.Monad.Identity
 import           Control.Monad.State.Strict
-import           Data.Foldable              (foldl')
-import qualified Data.Map.Strict            as Map
+import           Control.Monad.Writer.Strict
+import           Data.Foldable               (foldl')
+import qualified Data.Map.Strict             as Map
 
 import           Raft
 import           Raft.Log
@@ -46,7 +47,7 @@ testLoop s = go s [Tick 0, Tick 0, ClientRequest 0 (Set "foo" 42), ClientRequest
                             (RequestVoteRes _ to _)   -> to
                             (ClientRequest to _)      -> to
               (state, machine) = servers Map.! recipient
-              ((msgs, state'), machine') = runState (runStateT (handleMessage apply msg) state) machine
+              (((_, msgs), state'), machine') = runState (runStateT (runWriterT (handleMessage apply msg)) state) machine
               servers' = Map.insert recipient (state', machine') servers
           print msg
           print state'

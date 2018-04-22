@@ -2,19 +2,19 @@
 
 module Raft where
 
-import           Control.Monad.Identity     hiding (unless, when)
-import           Control.Monad.State.Strict hiding (unless, when)
-import qualified Data.Map.Strict            as Map
-import           Data.Maybe                 (fromJust, isNothing)
-import           Data.Ratio                 ((%))
-import           Debug.Trace                (trace)
-import           Prelude                    hiding (log)
+import           Control.Monad.State.Strict
+import           Control.Monad.Writer.Strict
+import qualified Data.Map.Strict             as Map
+import           Data.Maybe                  (fromJust, isNothing)
+import           Data.Ratio                  ((%))
+import           Debug.Trace                 (trace)
+import           Prelude                     hiding (log)
 
 import           Raft.Log
 import           Raft.Rpc
 import           Raft.Server
 
-handleAppendEntries :: Monad m => AppendEntries a -> ServerT a m (Bool, String)
+handleAppendEntries :: Monad m => AppendEntries a -> ServerTW a m (Bool, String)
 handleAppendEntries r = do
   s <- get
   let log = sLog s
@@ -51,7 +51,7 @@ appendEntries (l:ls) (e:es) = case compare (eIndex l) (eIndex e) of
                                         else l : appendEntries ls es
                                GT -> e:es
 
-handleRequestVote :: Monad m => RequestVote a -> ServerT a m Bool
+handleRequestVote :: Monad m => RequestVote a -> ServerTW a m Bool
 handleRequestVote r = do
   s <- get
   let currentTerm = sCurrentTerm s
@@ -83,12 +83,11 @@ findByIndex l i | i > length l = Nothing
 findByIndex l i = Just $ l !! i
 
 -- `term` is the updated term communicated via an RPC req/res
-convertToFollower :: Monad m => Term -> ServerT a m [Message a]
-convertToFollower term = do
+convertToFollower :: Monad m => Term -> ServerTW a m ()
+convertToFollower term =
   modify' $ \s -> s { sRole = Follower, sCurrentTerm = term, sVotesReceived = 0 }
-  pure []
 
-convertToCandidate :: Monad m => ServerT a m [Message a]
+convertToCandidate :: Monad m => ServerTW a m ()
 convertToCandidate = do
   newTerm <- incTerm <$> gets sCurrentTerm
   selfId <- gets sId
@@ -106,21 +105,20 @@ convertToCandidate = do
                           , rvCandidateId = selfId
                           , rvLastLogIndex = eIndex lastLogEntry
                           , rvLastLogTerm = eTerm lastLogEntry }
-  pure $ map (\i -> RequestVoteReq selfId i rpc) serverIds
+  tell $ map (\i -> RequestVoteReq selfId i rpc) serverIds
 
-convertToLeader :: Monad m => ServerT a m [Message a]
+convertToLeader :: Monad m => ServerTW a m ()
 convertToLeader = do
   modify' $ \s -> s { sRole = Leader }
-  hbs <- sendHeartbeats
-  pure hbs
+  sendHeartbeats
 
-sendHeartbeats :: Monad m => ServerT a m [Message a]
+sendHeartbeats :: Monad m => ServerTW a m ()
 sendHeartbeats = do
   serverIds <- gets sServerIds
   term <- gets sCurrentTerm
   selfId <- gets sId
   commitIndex <- gets sCommitIndex
-  pure $ map (\i -> mkHeartbeat selfId i term commitIndex) serverIds
+  tell $ map (\i -> mkHeartbeat selfId i term commitIndex) serverIds
     where mkHeartbeat from to term commitIndex =
             AppendEntriesReq from to AppendEntries
               { aeTerm = term
@@ -130,7 +128,7 @@ sendHeartbeats = do
               , aeEntries = []
               , aeLeaderCommit = commitIndex }
 
-sendAppendEntries :: Monad m => ServerId -> LogIndex -> ServerT a m [Message a]
+sendAppendEntries :: Monad m => ServerId -> LogIndex -> ServerTW a m ()
 sendAppendEntries followerId logIndex = do
   term <- gets sCurrentTerm
   selfId <- gets sId
@@ -145,13 +143,13 @@ sendAppendEntries followerId logIndex = do
                          , aeEntries = [entry]
                          , aeLeaderCommit = commitIndex }
       req = AppendEntriesReq selfId followerId ae
-  pure [req]
+  tell [req]
 
 -- if there exists an N such that N > commitIndex, a majority of matchIndex[i]
 -- >= N, and log[N].term == currentTerm: set commitIndex = N
 -- For simplicity, we only check the case of N = commitIndex + 1
 -- Changing this would probably bring a perf improvement
-checkCommitIndex :: Monad m => ServerT a m ()
+checkCommitIndex :: Monad m => ServerTW a m ()
 checkCommitIndex = do
   n <- (+1) <$> gets sCommitIndex
   matchIndex <- gets sMatchIndex
@@ -162,7 +160,7 @@ checkCommitIndex = do
   when (majorityUpToDate && eTerm (log !! n) == currentTerm) $
     modify' $ \s -> s { sCommitIndex = n }
 
-applyCommittedLogEntries :: Monad m => (a -> m ()) -> ServerT a m ()
+applyCommittedLogEntries :: Monad m => (a -> m ()) -> ServerTW a m ()
 applyCommittedLogEntries apply = do
   lastApplied <- gets sLastApplied
   commitIndex <- gets sCommitIndex
@@ -171,7 +169,7 @@ applyCommittedLogEntries apply = do
   if commitIndex > lastApplied
      then do
        modify' $ \s -> s { sLastApplied = lastApplied + 1 }
-       lift $ apply (eCommand entry)
+       (lift . lift) $ apply (eCommand entry)
        pure ()
      else pure ()
 
@@ -187,7 +185,15 @@ deriving instance Show a => Show (Message a)
 
 type ServerT a m = StateT (ServerState a) m
 
-handleMessage :: Monad m => (a -> m ()) -> Message a -> ServerT a m [Message a]
+type ServerTW a m = WriterT [Message a] (ServerT a m)
+
+foo :: Monad m => Message a -> ServerTW a m ()
+foo msg = do
+  selfId <- gets sId
+  tell [Tick selfId]
+  tell [Tick 2]
+
+handleMessage :: Monad m => (a -> m ()) -> Message a -> ServerTW a m ()
 handleMessage apply (Tick _) = do
   modify' $ \s -> s { sTock = sTock s + 1 }
   role <- gets sRole
@@ -202,7 +208,7 @@ handleMessage _ (AppendEntriesReq from to r) = do
   when (aeTerm r > currentTerm) $
     void $ convertToFollower (aeTerm r)
   updatedTerm <- gets sCurrentTerm
-  pure [AppendEntriesRes to from (updatedTerm, success)]
+  tell [AppendEntriesRes to from (updatedTerm, success)]
 handleMessage apply (AppendEntriesRes from to (term, success)) = do
   role <- gets sRole
   when (role == Leader) $ do
@@ -229,7 +235,7 @@ handleMessage _ (RequestVoteReq from to r) = do
   when (rvTerm r > currentTerm) $
     void $ convertToFollower (rvTerm r)
   updatedTerm <- gets sCurrentTerm
-  pure [RequestVoteRes to from (updatedTerm, voteGranted)]
+  tell [RequestVoteRes to from (updatedTerm, voteGranted)]
 handleMessage _ (RequestVoteRes from to (term, voteGranted)) = do
   currentTerm <- gets sCurrentTerm
   role <- gets sRole
@@ -248,8 +254,8 @@ handleMessage _ (ClientRequest to c) = do
   votedFor <- gets sVotedFor
   if role /= Leader
      then case votedFor of
-            Nothing     -> pure []
-            Just leader -> pure [ClientRequest leader c]
+            Nothing     -> pure ()
+            Just leader -> tell [ClientRequest leader c]
      else do
        log <- gets sLog
        currentTerm <- gets sCurrentTerm
@@ -258,12 +264,4 @@ handleMessage _ (ClientRequest to c) = do
        modify' $ \s -> s { sLog = log ++ [entry] }
        -- broadcast this new entry to followers
        serverIds <- gets sServerIds
-       join <$> mapM (\i -> sendAppendEntries i nextIndex) serverIds
-
--- like Control.Monad.when, but returns mempty instead of ()
-when :: (Monad m, Monoid a) => Bool -> m a -> m a
-when p f = if p then f else pure mempty
-
--- like Control.Monad.unless, but returns mempty instead of ()
-unless :: (Monad m, Monoid a) => Bool -> m a -> m a
-unless p f = if p then pure mempty else f
+       mapM_ (\i -> sendAppendEntries i nextIndex) serverIds
