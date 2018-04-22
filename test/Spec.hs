@@ -3,6 +3,7 @@ import           Control.Monad.State.Strict
 import           Control.Monad.Writer.Strict
 import           Data.Foldable               (foldl')
 import qualified Data.Map.Strict             as Map
+import           Data.Maybe                  (fromJust)
 
 import           Raft
 import           Raft.Log
@@ -17,7 +18,7 @@ data Command a b =
 newtype StateMachine a b = StateMachine { smMap :: Map.Map a b }
   deriving (Eq, Show)
 
-type StateMachineM a b = StateT (StateMachine a b) Identity
+type StateMachineM a b = StateT (StateMachine a b) Maybe
 
 apply :: Ord a => Command a b -> StateMachineM a b ()
 apply NoOp = pure ()
@@ -47,7 +48,7 @@ testLoop s = go s [Tick 0, Tick 0, ClientRequest 0 (Set "foo" 42), ClientRequest
                             (RequestVoteRes _ to _)   -> to
                             (ClientRequest to _)      -> to
               (state, machine) = servers Map.! recipient
-              (((_, msgs), state'), machine') = runState (runStateT (runWriterT (handleMessage apply msg)) state) machine
+              (((_, msgs), state'), machine') = fromJust $ runStateT (runStateT (runWriterT (handleMessage apply msg)) state) machine
               servers' = Map.insert recipient (state', machine') servers
           print msg
           print state'

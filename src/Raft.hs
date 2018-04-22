@@ -193,7 +193,7 @@ foo msg = do
   tell [Tick selfId]
   tell [Tick 2]
 
-handleMessage :: Monad m => (a -> m ()) -> Message a -> ServerTW a m ()
+handleMessage :: MonadPlus m => (a -> m ()) -> Message a -> ServerTW a m ()
 handleMessage apply (Tick _) = do
   modify' $ \s -> s { sTock = sTock s + 1 }
   role <- gets sRole
@@ -205,48 +205,46 @@ handleMessage _ (AppendEntriesReq from to r) = do
   currentTerm <- gets sCurrentTerm
   (success, reason) <- handleAppendEntries r
   trace reason $ modify' (\s -> s { sTock = 0 })
-  when (aeTerm r > currentTerm) $
-    void $ convertToFollower (aeTerm r)
+  when (aeTerm r > currentTerm) $ convertToFollower (aeTerm r)
   updatedTerm <- gets sCurrentTerm
   tell [AppendEntriesRes to from (updatedTerm, success)]
 handleMessage apply (AppendEntriesRes from to (term, success)) = do
   role <- gets sRole
-  when (role == Leader) $ do
-    nextIndex <- gets sNextIndex
-    matchIndex <- gets sMatchIndex
-    -- N.B. need to "update nextIndex and matchIndex for follower"
-    -- but not sure what to update it to.
-    -- For now:
-    -- update matchIndex[followerId] = nextIndex[followerId]
-    -- increment nextIndex[followerId]
-    let next = nextIndex Map.! from
-        match = matchIndex Map.! from
-        (next', match') = if success then (next + 1, next)
-                                     else (next - 1, match)
-        nextIndex' = Map.insert from next' nextIndex
-        matchIndex' = Map.insert from match' matchIndex
-    modify' $ \s -> s { sNextIndex = nextIndex', sMatchIndex = matchIndex' }
-    checkCommitIndex
-    applyCommittedLogEntries apply
-    unless success (sendAppendEntries from next')
+  guard (role == Leader)
+  nextIndex <- gets sNextIndex
+  matchIndex <- gets sMatchIndex
+  -- N.B. need to "update nextIndex and matchIndex for follower"
+  -- but not sure what to update it to.
+  -- For now:
+  -- update matchIndex[followerId] = nextIndex[followerId]
+  -- increment nextIndex[followerId]
+  let next = nextIndex Map.! from
+      match = matchIndex Map.! from
+      (next', match') = if success then (next + 1, next)
+                                   else (next - 1, match)
+      nextIndex' = Map.insert from next' nextIndex
+      matchIndex' = Map.insert from match' matchIndex
+  modify' $ \s -> s { sNextIndex = nextIndex', sMatchIndex = matchIndex' }
+  checkCommitIndex
+  applyCommittedLogEntries apply
+  unless success (sendAppendEntries from next')
 handleMessage _ (RequestVoteReq from to r) = do
   currentTerm <- gets sCurrentTerm
   voteGranted <- handleRequestVote r
-  when (rvTerm r > currentTerm) $
-    void $ convertToFollower (rvTerm r)
+  when (rvTerm r > currentTerm) $ convertToFollower (rvTerm r)
   updatedTerm <- gets sCurrentTerm
   tell [RequestVoteRes to from (updatedTerm, voteGranted)]
 handleMessage _ (RequestVoteRes from to (term, voteGranted)) = do
   currentTerm <- gets sCurrentTerm
   role <- gets sRole
-  when (role == Candidate) $
-    if term > currentTerm
-       then convertToFollower term
-       else when voteGranted $ do
-              votes <- (+ 1) <$> gets sVotesReceived
-              total <- (+ 1) . length <$> gets sServerIds
-              modify' $ \s -> s { sVotesReceived = votes }
-              when (votes % total > 1 % 2) convertToLeader
+  guard (role == Candidate)
+  if term > currentTerm
+     then convertToFollower term
+     else when voteGranted $ do
+            votes <- (+ 1) <$> gets sVotesReceived
+            total <- (+ 1) . length <$> gets sServerIds
+            modify' $ \s -> s { sVotesReceived = votes }
+            when (votes % total > 1 % 2) convertToLeader
 handleMessage _ (ClientRequest to c) = do
   -- TODO: followers should redirect request to leader
   -- TODO: we should actually respond to the request
