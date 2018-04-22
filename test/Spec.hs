@@ -46,7 +46,7 @@ testLoop s = go s [Tick 0, Tick 0, Tick 0, Tick 0, Tick 0, ClientRequest 0 (Set 
                             (RequestVoteRes _ to _)   -> to
                             (ClientRequest to _)      -> to
               (state, machine) = servers Map.! recipient
-              ((msgs, state'), machine') = runState (runStateT (handleMessageM apply msg) state) machine
+              ((msgs, state'), machine') = runState (runStateT (handleMessage apply msg) state) machine
               servers' = Map.insert recipient (state', machine') servers
           print msg
           print state'

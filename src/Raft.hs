@@ -14,8 +14,8 @@ import           Raft.Log
 import           Raft.Rpc
 import           Raft.Server
 
-handleAppendEntriesM :: Monad m => AppendEntries a -> ServerT a m (Bool, String)
-handleAppendEntriesM r = do
+handleAppendEntries :: Monad m => AppendEntries a -> ServerT a m (Bool, String)
+handleAppendEntries r = do
   s <- get
   let log = sLog s
       commitIndex = sCommitIndex s
@@ -51,8 +51,8 @@ appendEntries (l:ls) (e:es) = case compare (eIndex l) (eIndex e) of
                                         else l : appendEntries ls es
                                GT -> e:es
 
-handleRequestVoteM :: Monad m => RequestVote a -> ServerT a m Bool
-handleRequestVoteM r = do
+handleRequestVote :: Monad m => RequestVote a -> ServerT a m Bool
+handleRequestVote r = do
   s <- get
   let currentTerm = sCurrentTerm s
       votedFor = sVotedFor s
@@ -187,23 +187,23 @@ deriving instance Show a => Show (Message a)
 
 type ServerT a m = StateT (ServerState a) m
 
-handleMessageM :: Monad m => (a -> m ()) -> Message a -> ServerT a m [Message a]
-handleMessageM apply (Tick _) = do
+handleMessage :: Monad m => (a -> m ()) -> Message a -> ServerT a m [Message a]
+handleMessage apply (Tick _) = do
   modify' $ \s -> s { sTock = sTock s + 1 }
   role <- gets sRole
   applyCommittedLogEntries apply
   tock <- gets sTock
   timeout <- gets sElectionTimeout
   when (tock > timeout && role == Follower) convertToCandidate
-handleMessageM _ (AppendEntriesReq from to r) = do
+handleMessage _ (AppendEntriesReq from to r) = do
   currentTerm <- gets sCurrentTerm
-  (success, reason) <- handleAppendEntriesM r
+  (success, reason) <- handleAppendEntries r
   trace reason $ modify' (\s -> s { sTock = 0 })
   when (aeTerm r > currentTerm) $
     void $ convertToFollower (aeTerm r)
   updatedTerm <- gets sCurrentTerm
   pure [AppendEntriesRes to from (updatedTerm, success)]
-handleMessageM apply (AppendEntriesRes from to (term, success)) = do
+handleMessage apply (AppendEntriesRes from to (term, success)) = do
   role <- gets sRole
   when (role == Leader) $ do
     nextIndex <- gets sNextIndex
@@ -223,14 +223,14 @@ handleMessageM apply (AppendEntriesRes from to (term, success)) = do
     checkCommitIndex
     applyCommittedLogEntries apply
     unless success (sendAppendEntries from next')
-handleMessageM _ (RequestVoteReq from to r) = do
+handleMessage _ (RequestVoteReq from to r) = do
   currentTerm <- gets sCurrentTerm
-  voteGranted <- handleRequestVoteM r
+  voteGranted <- handleRequestVote r
   when (rvTerm r > currentTerm) $
     void $ convertToFollower (rvTerm r)
   updatedTerm <- gets sCurrentTerm
   pure [RequestVoteRes to from (updatedTerm, voteGranted)]
-handleMessageM _ (RequestVoteRes from to (term, voteGranted)) = do
+handleMessage _ (RequestVoteRes from to (term, voteGranted)) = do
   currentTerm <- gets sCurrentTerm
   role <- gets sRole
   when (role == Candidate) $
@@ -241,7 +241,7 @@ handleMessageM _ (RequestVoteRes from to (term, voteGranted)) = do
               total <- (+ 1) . length <$> gets sServerIds
               modify' $ \s -> s { sVotesReceived = votes }
               when (votes % total > 1 % 2) convertToLeader
-handleMessageM _ (ClientRequest to c) = do
+handleMessage _ (ClientRequest to c) = do
   -- TODO: followers should redirect request to leader
   -- TODO: we should actually respond to the request
   role <- gets sRole
