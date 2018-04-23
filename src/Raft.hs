@@ -2,9 +2,8 @@
 
 module Raft where
 
-import           Control.Lens                (at, over, set, use, (%=), (%~),
-                                              (+=), (-=), (.=), (?=), (?~),
-                                              (^.))
+import           Control.Lens                (at, use, (%=), (+=), (.=), (<+=),
+                                              (?=), (^.))
 import           Control.Monad.State.Strict
 import           Control.Monad.Writer.Strict
 import qualified Data.Map.Strict             as Map
@@ -17,30 +16,30 @@ import           Raft.Log
 import           Raft.Rpc
 import           Raft.Server
 
+-- reply false if term < currentTerm
+-- reply false if log doesn't contain an entry at prevLogIndex whose term
+--   matches prevLogTerm
+-- apply entries to the log
+-- if leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of
+--   last new entry)
 handleAppendEntries :: Monad m => AppendEntries a -> ServerT a m (Bool, String)
 handleAppendEntries r = do
   log <- use entryLog
   currentCommitIndex <- use commitIndex
   currentTerm <- use serverTerm
-  -- reply false if term < currentTerm
   if r ^. leaderTerm < currentTerm
      then pure (False, "term < currentTerm")
-     -- reply false if log doesn't contain an entry at prevLogIndex whose term
-     -- matches prevLogTerm
      else case findEntry log (r ^. prevLogIndex) (r ^. prevLogTerm) of
             Nothing -> pure (False, "no entry found")
-            -- apply entries to the log
-            -- if leaderCommit > commitIndex,
-            -- set commitIndex = min(leaderCommit, index of last new entry)
             Just _ -> do
               entryLog %= (\l -> appendEntries l (r ^. entries))
               when (r ^. leaderCommit > currentCommitIndex) $
                 commitIndex .= min (r ^. leaderCommit) (last log ^. index)
               pure (True, "success")
 
--- - if an existing entry conflicts with a new one (same index, different terms),
+-- if an existing entry conflicts with a new one (same index, different terms),
 --   delete the existing entry and all that follow it
--- - append any new entries not already in the log
+-- append any new entries not already in the log
 appendEntries :: Log a -> [LogEntry a] -> Log a
 appendEntries log [] = log
 appendEntries [] es  = es
@@ -51,6 +50,9 @@ appendEntries (l:ls) (e:es) = case compare (_Index l) (_Index e) of
                                         else l : appendEntries ls es
                                GT -> e:es
 
+-- reply false if term < currentTerm
+-- if votedFor is null or candidateId, and candidate's log is at least as
+--   up-to-date as receiver's log, grant vote
 handleRequestVote :: Monad m => RequestVote a -> ServerT a m Bool
 handleRequestVote r = do
   s <- get
@@ -58,11 +60,8 @@ handleRequestVote r = do
       matchingVote = s ^. votedFor == Just (r ^. candidateId)
       -- N.B. is this the right way to determine up-to-date?
       logUpToDate = _LastLogIndex r >= s ^. commitIndex
-  -- reply false if term < currentTerm
   if _CandidateTerm r < currentTerm
      then pure False
-     -- if votedFor is null or candidateId, and candidate's log is at least as
-     -- up-to-date as receiver's log, grant vote
      else if (isNothing (s ^. votedFor) || matchingVote) && logUpToDate
      then do
        votedFor .= Just (r ^. candidateId)
@@ -90,26 +89,27 @@ convertToFollower leaderTerm = do
   serverTerm .= leaderTerm
   votesReceived .= 0
 
+-- increment currentTerm
+-- vote for self
+-- reset election timer
+-- send RequestVote RPCs to all other servers
 convertToCandidate :: Monad m => ServerT a m ()
 convertToCandidate = do
   newTerm <- incTerm <$> use serverTerm
   ownId <- use selfId
   lastLogEntry <- last <$> use entryLog
   servers <- use serverIds
-  -- increment currentTerm
-  -- vote for self
-  -- reset election timer
   role .= Candidate
   serverTerm .= newTerm
   votedFor .= Just ownId
   tock .= 0
-  -- send RequestVote RPCs to all other servers
   let rpc = RequestVote { _CandidateTerm = newTerm
                         , _CandidateId = ownId
                         , _LastLogIndex = lastLogEntry ^. index
                         , _LastLogTerm = lastLogEntry ^. term }
   tell $ map (\i -> RequestVoteReq ownId i rpc) servers
 
+-- send initial empty AppendEntries RPCs (hearbeats) to each server
 convertToLeader :: Monad m => ServerT a m ()
 convertToLeader = do
   role .= Leader
@@ -149,7 +149,7 @@ sendAppendEntries followerId logIndex = do
   tell [req]
 
 -- if there exists an N such that N > commitIndex, a majority of matchIndex[i]
--- >= N, and log[N].term == currentTerm: set commitIndex = N
+--   >= N, and log[N].term == currentTerm: set commitIndex = N
 -- For simplicity, we only check the case of N = commitIndex + 1
 -- Changing this would probably bring a perf improvement
 checkCommitIndex :: Monad m => ServerT a m ()
@@ -163,14 +163,17 @@ checkCommitIndex = do
   when (majorityUpToDate && (log !! n) ^. term == currentTerm) $
     commitIndex .= n
 
+-- if commitIndex > lastApplied:
+--   increment lastApplied
+--   apply log[lastApplied] to state machine
 applyCommittedLogEntries :: Monad m => (a -> m ()) -> ServerT a m ()
 applyCommittedLogEntries apply = do
   lastAppliedIndex <- use lastApplied
   lastCommittedIndex <- use commitIndex
   log <- use entryLog
   when (lastCommittedIndex > lastAppliedIndex) $ do
-    lastApplied += 1
-    let entry = fromJust $ findByIndex log (lastAppliedIndex + 1)
+    lastApplied' <- lastApplied <+= 1
+    let entry = fromJust $ findByIndex log lastApplied'
     (lift . lift) $ apply (_Command entry)
 
 data Message a =
@@ -186,12 +189,12 @@ deriving instance Show a => Show (Message a)
 type ServerT a m = WriterT [Message a] (StateT (ServerState a) m)
 
 handleMessage :: MonadPlus m => (a -> m ()) -> Message a -> ServerT a m ()
+-- if election timeout elapses without receiving AppendEntries RPC from current
+-- leader or granting vote to candidate, convert to candidate
 handleMessage apply (Tick _) = do
-  tock += 1
   applyCommittedLogEntries apply
-  s <- get
+  elapsed <- tock <+= 1
   role <- use role
-  elapsed <- use tock
   timeout <- use electionTimeout
   when (elapsed > timeout && role == Follower) convertToCandidate
 handleMessage _ (AppendEntriesReq from to r) = do

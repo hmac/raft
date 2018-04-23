@@ -36,7 +36,7 @@ main = do
   testLoop servers
 
 testLoop :: Map.Map ServerId (ServerState (Command String Int), StateMachine String Int) -> IO ()
-testLoop s = go s [Tick 0, Tick 0, ClientRequest 0 (Set "foo" 42), ClientRequest 1 (Set "bar" 43), ClientRequest 0 (Set "foo" 7)]
+testLoop s = go s [Tick 0, Tick 0, ClientRequest 0 (Set "foo" 42), ClientRequest 0 (Set "bar" 43), ClientRequest 0 (Set "foo" 7)]
   where go :: Map.Map ServerId (ServerState (Command String Int), StateMachine String Int) -> [Message (Command String Int)] -> IO ()
         go servers [] = putStrLn "finished."
         go servers (msg:queue) = do
