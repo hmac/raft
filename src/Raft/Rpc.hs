@@ -1,36 +1,42 @@
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TemplateHaskell    #-}
 
 module Raft.Rpc where
 
+import           Control.Lens
 import           Raft.Log
 import           Raft.Server
 
 data AppendEntries a = AppendEntries
   -- leader's term
-  { aeTerm         :: Term
+  { _LeaderTerm   :: Term
   -- so follower can redirect clients
-  , aeLeaderId     :: ServerId
+  , _LeaderId     :: ServerId
   -- index of log entry immediately preceding new ones
-  , aePrevLogIndex :: LogIndex
+  , _PrevLogIndex :: LogIndex
   -- term of prevLogIndex entry
-  , aePrevLogTerm  :: Term
+  , _PrevLogTerm  :: Term
   -- log entries to store (empty for heartbeat)
-  , aeEntries      :: [LogEntry a]
+  , _Entries      :: [LogEntry a]
   -- leader's commitIndex
-  , aeLeaderCommit :: LogIndex
+  , _LeaderCommit :: LogIndex
   }
 
 deriving instance (Show a) => Show (AppendEntries a)
 
+makeLenses ''AppendEntries
+
 data RequestVote a = RequestVote
   -- candidate's term
-  { rvTerm         :: Term
+  { _CandidateTerm :: Term
   -- candidate requesting vote
-  , rvCandidateId  :: ServerId
+  , _CandidateId   :: ServerId
   -- index of candidate's last log entry
-  , rvLastLogIndex :: LogIndex
+  , _LastLogIndex  :: LogIndex
   -- term of candidate's last log entry
-  , rvLastLogTerm  :: Term
+  , _LastLogTerm   :: Term
   }
 
 deriving instance (Show a) => Show (RequestVote a)
+
+makeLenses ''RequestVote

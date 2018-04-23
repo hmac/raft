@@ -1,6 +1,9 @@
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TemplateHaskell    #-}
 
 module Raft.Log where
+
+import           Control.Lens
 
 newtype Term = Term { unTerm :: Int } deriving (Eq, Ord)
 
@@ -10,14 +13,16 @@ instance Show Term where
 incTerm :: Term -> Term
 incTerm Term { unTerm = t } = Term { unTerm = t + 1 }
 
+-- needs to be 1-indexed - maybe use something other than a list?
+type Log a = [LogEntry a]
+type LogIndex = Int
+
 data LogEntry a = LogEntry
-  { eIndex   :: LogIndex
-  , eTerm    :: Term
-  , eCommand :: a
+  { _Index   :: LogIndex
+  , _Term    :: Term
+  , _Command :: a
   }
 
 deriving instance (Show a) => Show (LogEntry a)
 
--- needs to be 1-indexed - maybe use something other than a list?
-type Log a = [LogEntry a]
-type LogIndex = Int
+makeLenses ''LogEntry

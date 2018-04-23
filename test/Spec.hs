@@ -48,29 +48,37 @@ testLoop s = go s [Tick 0, Tick 0, ClientRequest 0 (Set "foo" 42), ClientRequest
                             (RequestVoteRes _ to _)   -> to
                             (ClientRequest to _)      -> to
               (state, machine) = servers Map.! recipient
-              (((_, msgs), state'), machine') = fromJust $ runStateT (runStateT (runWriterT (handleMessage apply msg)) state) machine
-              servers' = Map.insert recipient (state', machine') servers
-          print msg
-          print state'
-          print machine'
-          go servers' (queue ++ msgs)
+              res = runStateT (runStateT (runWriterT (handleMessage apply msg)) state) machine
+          case res of
+            Just (((_, msgs), state'), machine') -> do
+              let servers' = Map.insert recipient (state', machine') servers
+              print msg
+              -- print state'
+              putStrLn $ show (_selfId state) ++ ": " ++ show machine'
+              go servers' (queue ++ msgs)
+            Nothing -> do
+              putStrLn "\n\n"
+              print msg
+              print state
+              print res
+              error "received nothing!"
 
 mkServer :: Int -> [ServerId] -> Int -> (ServerState (Command a b), StateMachine a b)
 mkServer serverId otherServerIds electionTimeout = (serverState, StateMachine { smMap = Map.empty })
   where t0 = Term { unTerm = 0 }
         initialMap :: Map.Map ServerId Int
         initialMap = foldl' (\m sid -> Map.insert sid 0 m) Map.empty otherServerIds
-        serverState = ServerState { sId = serverId
-                                  , sRole = Follower
-                                  , sServerIds = otherServerIds
-                                  , sCurrentTerm = t0
-                                  , sVotedFor = Nothing
-                                  , sLog = [LogEntry { eIndex = 0, eTerm = t0, eCommand = NoOp }]
-                                  , sCommitIndex = 0
-                                  , sLastApplied = 0
-                                  , sTock = 0
-                                  , sElectionTimeout = electionTimeout
-                                  , sNextIndex = initialMap
-                                  , sMatchIndex = initialMap
-                                  , sVotesReceived = 0 }
+        serverState = ServerState { _selfId = serverId
+                                  , _role = Follower
+                                  , _serverIds = otherServerIds
+                                  , _serverTerm = t0
+                                  , _votedFor = Nothing
+                                  , _entryLog = [LogEntry { _Index = 0, _Term = t0, _Command = NoOp }]
+                                  , _commitIndex = 0
+                                  , _lastApplied = 0
+                                  , _tock = 0
+                                  , _electionTimeout = electionTimeout
+                                  , _nextIndex = initialMap
+                                  , _matchIndex = initialMap
+                                  , _votesReceived = 0 }
 
