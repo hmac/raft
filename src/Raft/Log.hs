@@ -1,11 +1,16 @@
+{-# LANGUAGE DeriveGeneric      #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell    #-}
 
 module Raft.Log where
 
 import           Control.Lens
+import           Data.Binary  (Binary)
+import           GHC.Generics (Generic)
 
-newtype Term = Term { unTerm :: Int } deriving (Eq, Ord)
+newtype Term = Term { unTerm :: Int } deriving (Eq, Ord, Generic)
+
+instance Binary Term
 
 instance Show Term where
   show Term { unTerm = t } = show t
@@ -21,7 +26,9 @@ data LogEntry a = LogEntry
   { _Index   :: LogIndex
   , _Term    :: Term
   , _Command :: a
-  }
+  } deriving (Generic)
+
+instance Binary a => Binary (LogEntry a)
 
 deriving instance (Show a) => Show (LogEntry a)
 

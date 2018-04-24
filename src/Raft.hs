@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveGeneric      #-}
 {-# LANGUAGE StandaloneDeriving #-}
 
 module Raft where
@@ -6,10 +7,12 @@ import           Control.Lens                (at, use, (%=), (+=), (.=), (<+=),
                                               (?=), (^.))
 import           Control.Monad.State.Strict
 import           Control.Monad.Writer.Strict
+import           Data.Binary                 (Binary)
 import qualified Data.Map.Strict             as Map
 import           Data.Maybe                  (fromJust, isNothing)
 import           Data.Ratio                  ((%))
-import           Debug.Trace                 (trace)
+import           Data.Typeable               (Typeable)
+import           GHC.Generics                (Generic)
 import           Prelude                     hiding (log)
 
 import           Raft.Log
@@ -183,6 +186,10 @@ data Message a =
   | RequestVoteRes ServerId ServerId (Term, Bool)
   | Tick ServerId
   | ClientRequest ServerId a
+  deriving (Generic)
+
+deriving instance Typeable a => Typeable (Message a)
+instance Binary a => Binary (Message a)
 
 deriving instance Show a => Show (Message a)
 
@@ -200,7 +207,7 @@ handleMessage apply (Tick _) = do
 handleMessage _ (AppendEntriesReq from to r) = do
   currentTerm <- use serverTerm
   (success, reason) <- handleAppendEntries r
-  trace reason $ tock .= 0
+  tock .= 0
   when (r ^. leaderTerm > currentTerm) $ convertToFollower (r ^. leaderTerm)
   updatedTerm <- use serverTerm
   tell [AppendEntriesRes to from (updatedTerm, success)]

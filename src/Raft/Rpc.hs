@@ -1,9 +1,12 @@
+{-# LANGUAGE DeriveGeneric      #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell    #-}
 
 module Raft.Rpc where
 
 import           Control.Lens
+import           Data.Binary  (Binary)
+import           GHC.Generics (Generic)
 import           Raft.Log
 import           Raft.Server
 
@@ -20,8 +23,9 @@ data AppendEntries a = AppendEntries
   , _Entries      :: [LogEntry a]
   -- leader's commitIndex
   , _LeaderCommit :: LogIndex
-  }
+  } deriving (Generic)
 
+instance Binary a => Binary (AppendEntries a)
 deriving instance (Show a) => Show (AppendEntries a)
 
 makeLenses ''AppendEntries
@@ -35,8 +39,9 @@ data RequestVote a = RequestVote
   , _LastLogIndex  :: LogIndex
   -- term of candidate's last log entry
   , _LastLogTerm   :: Term
-  }
+  } deriving (Generic)
 
+instance Binary (RequestVote a)
 deriving instance (Show a) => Show (RequestVote a)
 
 makeLenses ''RequestVote

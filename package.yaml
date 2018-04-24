@@ -24,6 +24,7 @@ dependencies:
 - mtl
 - containers
 - lens
+- binary
 
 library:
   source-dirs: src
@@ -38,6 +39,8 @@ executables:
     - -with-rtsopts=-N
     dependencies:
     - raft
+    - distributed-process
+    - network-transport-tcp
 
 tests:
   raft-test:
