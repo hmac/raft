@@ -27,6 +27,7 @@ data AppendEntries a = AppendEntries
 
 instance Binary a => Binary (AppendEntries a)
 deriving instance (Show a) => Show (AppendEntries a)
+deriving instance (Eq a) => Eq (AppendEntries a)
 
 makeLenses ''AppendEntries
 
@@ -43,5 +44,6 @@ data RequestVote a = RequestVote
 
 instance Binary (RequestVote a)
 deriving instance (Show a) => Show (RequestVote a)
+deriving instance (Eq a) => Eq (RequestVote a)
 
 makeLenses ''RequestVote

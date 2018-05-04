@@ -105,7 +105,7 @@ convertToCandidate = do
   role .= Candidate
   serverTerm .= newTerm
   votedFor .= Just ownId
-  tock .= 0
+  electionTimer .= 0
   let rpc = RequestVote { _CandidateTerm = newTerm
                         , _CandidateId = ownId
                         , _LastLogIndex = lastLogEntry ^. index
@@ -192,6 +192,7 @@ deriving instance Typeable a => Typeable (Message a)
 instance Binary a => Binary (Message a)
 
 deriving instance Show a => Show (Message a)
+deriving instance Eq a => Eq (Message a)
 
 type ServerT a m = WriterT [Message a] (StateT (ServerState a) m)
 
@@ -200,14 +201,17 @@ handleMessage :: MonadPlus m => (a -> m ()) -> Message a -> ServerT a m ()
 -- leader or granting vote to candidate, convert to candidate
 handleMessage apply (Tick _) = do
   applyCommittedLogEntries apply
-  elapsed <- tock <+= 1
+  electionTimer' <- electionTimer <+= 1
+  heartbeatTimer' <- heartbeatTimer <+= 1
   role <- use role
-  timeout <- use electionTimeout
-  when (elapsed > timeout && role == Follower) convertToCandidate
+  electTimeout <- use electionTimeout
+  hbTimeout <- use heartbeatTimeout
+  when (electionTimer' >= electTimeout && role /= Leader) convertToCandidate
+  when (heartbeatTimer' >= hbTimeout && role == Leader) sendHeartbeats
 handleMessage _ (AppendEntriesReq from to r) = do
   currentTerm <- use serverTerm
   (success, reason) <- handleAppendEntries r
-  tock .= 0
+  electionTimer .= 0
   when (r ^. leaderTerm > currentTerm) $ convertToFollower (r ^. leaderTerm)
   updatedTerm <- use serverTerm
   tell [AppendEntriesRes to from (updatedTerm, success)]

@@ -34,36 +34,24 @@ main = do
   Right t <- createTransport "127.0.0.1" "10501" defaultTCPParameters
   node <- newLocalNode t initRemoteTable
   _ <- runProcess node $ do
-    (snd, rcv) <- newChan :: Process (SendPort (Raft.Message Command), ReceivePort (Raft.Message Command))
+    (sendPort, recvPort) <- newChan :: Process (SendPort (Raft.Message Command), ReceivePort (Raft.Message Command))
 
-    s0 <- spawnServer 0 [1, 2] snd
-    s1 <- spawnServer 1 [0, 2] snd
-    s2 <- spawnServer 2 [0, 1] snd
+    s0 <- spawnServer 0 [1, 2] sendPort 20 5
+    s1 <- spawnServer 1 [0, 2] sendPort 30 5
+    s2 <- spawnServer 2 [0, 1] sendPort 40 5
+    _ <- spawnClient sendPort 0
 
     let phonebook = [(0, s0), (1, s1), (2, s2)]
 
-    sendTick s0 0
-    sendTick s0 0
-    sendTick s0 0
-    sendTick s0 0
-
-    spawnClient snd 0
-
     forever $ do
-      m <- receiveChanTimeout 1000000 rcv
+      m <- receiveChanTimeout 1000000 recvPort
       case m of
         Nothing  -> die "nothing came back!"
-        Just msg -> do
+        Just msg ->
           case lookup (messageRecipient msg) phonebook of
-            Just pid -> do
-              send pid msg
+            Just pid -> send pid msg
             Nothing  -> die "could not look up server in phonebook"
   pure ()
-
-sendTick :: ProcessId -> ServerId -> Process ()
-sendTick pid sid = let tick :: Raft.Message Command
-                       tick = Tick sid
-                    in send pid tick
 
 data Command = NoOp | Set Int deriving (Eq, Show, Generic, Typeable)
 
@@ -77,11 +65,11 @@ apply :: Command -> StateMachineM ()
 apply NoOp    = pure ()
 apply (Set n) = modify' $ \s -> s { value = n }
 
-spawnServer :: ServerId -> [ServerId] -> SendPort (Raft.Message Command) -> Process ProcessId
-spawnServer self others proxy = spawnLocal $ do
-  spawnClock proxy self
+spawnServer :: ServerId -> [ServerId] -> SendPort (Raft.Message Command) -> Int -> Int -> Process ProcessId
+spawnServer self others proxy electionTimeout heartbeatTimeout = spawnLocal $ do
+  _ <- spawnClock proxy self
   go newServer newStateMachine
-  where (newServer, newStateMachine) = mkServer self others
+  where (newServer, newStateMachine) = mkServer self others electionTimeout heartbeatTimeout
         go s m = do
           msg <- expect
           say (show msg)
@@ -92,12 +80,13 @@ spawnServer self others proxy = spawnLocal $ do
 
 spawnClock :: SendPort (Raft.Message Command) -> ServerId -> Process ProcessId
 spawnClock chan sid = periodically (milliSeconds 500) $ do
+  say $ "sending Tick " ++ show sid
   sendChan chan (Tick sid)
 
 spawnClient :: SendPort (Raft.Message Command) -> ServerId -> Process ProcessId
-spawnClient chan sid = spawnLocal (go 0)
+spawnClient chan sid = spawnLocal $ liftIO (threadDelay 5) >> go 1
   where go n = do
-          liftIO $ threadDelay 1000000
+          liftIO $ threadDelay 2000000 -- 2 seconds
           sendChan chan (ClientRequest sid (Set n))
           go (n + 1)
 
@@ -116,8 +105,8 @@ messageRecipient (RequestVoteRes _ to _)   = to
 messageRecipient (Tick to)                 = to
 messageRecipient (ClientRequest to _)      = to
 
-mkServer :: ServerId -> [ServerId] -> (ServerState Command, StateMachine)
-mkServer self others = (serverState, StateMachine { value = 0 })
+mkServer :: ServerId -> [ServerId] -> Int -> Int -> (ServerState Command, StateMachine)
+mkServer self others electionTimeout heartbeatTimeout = (serverState, StateMachine { value = 0 })
   where t0 = Term { unTerm = 0 }
         initialMap :: Map.Map ServerId Int
         initialMap = foldl' (\m sid -> Map.insert sid 0 m) Map.empty others
@@ -129,8 +118,10 @@ mkServer self others = (serverState, StateMachine { value = 0 })
                                   , _entryLog = [LogEntry { _Index = 0, _Term = t0, _Command = NoOp }]
                                   , _commitIndex = 0
                                   , _lastApplied = 0
-                                  , _tock = 0
-                                  , _electionTimeout = 3
+                                  , _electionTimer = 0
+                                  , _heartbeatTimer = 0
+                                  , _electionTimeout = electionTimeout
+                                  , _heartbeatTimeout = heartbeatTimeout
                                   , _nextIndex = initialMap
                                   , _matchIndex = initialMap
                                   , _votesReceived = 0 }

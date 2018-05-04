@@ -30,7 +30,7 @@ library:
   source-dirs: src
 
 executables:
-  raft-exe:
+  raft:
     main:                Main.hs
     source-dirs:         app
     ghc-options:
@@ -52,3 +52,4 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - raft
+    - hspec

@@ -29,7 +29,7 @@ data LogEntry a = LogEntry
   } deriving (Generic)
 
 instance Binary a => Binary (LogEntry a)
-
 deriving instance (Show a) => Show (LogEntry a)
+deriving instance (Eq a) => Eq (LogEntry a)
 
 makeLenses ''LogEntry
