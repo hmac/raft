@@ -119,8 +119,7 @@ testAppendEntries = do
       case output node req of
         Just (((), [msg]), node') -> msg `shouldBe` AppendEntriesRes 0 1 (1, False)
   context "when the log contains a conflicting entry" $ do
-    let node = mkNode
-        zerothEntry = LogEntry { _Index = 0, _Term = 0, _Command = NoOp }
+    let zerothEntry = LogEntry { _Index = 0, _Term = 0, _Command = NoOp }
         firstEntry = LogEntry { _Index = 1, _Term = 1, _Command = NoOp }
         secondEntry = LogEntry { _Index = 2, _Term = 1, _Command = NoOp }
         thirdEntry = LogEntry { _Index = 1, _Term = 3, _Command = NoOp }
@@ -134,11 +133,71 @@ testAppendEntries = do
         req1 = mkAppendEntries 0 [firstEntry, secondEntry]
         req2 = mkAppendEntries 0 [thirdEntry]
     it "deletes the entry and all that follow it" $ do
-      case output node req1 of
+      case output mkNode req1 of
         Just (((), [msg]), node') -> do
           node'^.entryLog `shouldBe` [zerothEntry, firstEntry, secondEntry]
           msg `shouldBe` AppendEntriesRes 0 1 (1, True)
           case output node' req2 of
             Just (_, node'') -> do
-              1 `shouldBe` 1
               node''^.entryLog `shouldBe` [zerothEntry, thirdEntry]
+  context "when the log contains a valid entry" $ do
+    let zerothEntry = LogEntry { _Index = 0, _Term = 0, _Command = NoOp }
+        firstEntry = LogEntry { _Index = 1, _Term = 1, _Command = NoOp }
+        mkAppendEntries prevIndex es
+          = AppendEntriesReq 1 0 AppendEntries { _LeaderTerm = 1
+                                               , _LeaderId = 1
+                                               , _PrevLogIndex = prevIndex
+                                               , _PrevLogTerm = 0
+                                               , _Entries = es
+                                               , _LeaderCommit = 0 }
+        req = mkAppendEntries 0 [firstEntry]
+    it "appends it to the log" $ do
+      case output mkNode req of
+        Just (((), [msg]), node') -> do
+          msg `shouldBe` AppendEntriesRes 0 1 (1, True)
+          node'^.entryLog `shouldBe` [zerothEntry, firstEntry]
+  context "when leaderCommit > node's commitIndex" $ do
+    let zerothEntry = LogEntry { _Index = 0, _Term = 0, _Command = NoOp }
+        firstEntry = LogEntry { _Index = 1, _Term = 1, _Command = NoOp }
+        secondEntry = LogEntry { _Index = 2, _Term = 1, _Command = NoOp }
+        req = AppendEntriesReq 1 0 AppendEntries { _LeaderTerm = 1
+                                                 , _LeaderId = 1
+                                                 , _PrevLogIndex = 0
+                                                 , _PrevLogTerm = 0
+                                                 , _Entries = [firstEntry, secondEntry]
+                                                 , _LeaderCommit = 1 }
+        res = output mkNode req
+    context "and leaderCommit <= index of last new entry" $ do
+      it "sets commitIndex = leaderCommit" $ do
+        case res of
+          Just ((_, [msg]), node') -> do
+            msg `shouldBe` AppendEntriesRes 0 1 (1, True)
+            node'^.commitIndex `shouldBe` 1
+    context "and leaderCommit > index of last new entry" $ do
+      let req = AppendEntriesReq 1 0 AppendEntries { _LeaderTerm = 1
+                                                 , _LeaderId = 1
+                                                 , _PrevLogIndex = 0
+                                                 , _PrevLogTerm = 0
+                                                 , _Entries = [firstEntry, secondEntry]
+                                                 , _LeaderCommit = 3 }
+      it "sets commitIndex = index of last new entry" $
+        case res of
+          Just ((_, [msg]), node') -> do
+            msg `shouldBe` AppendEntriesRes 0 1 (1, True)
+            node'^.commitIndex `shouldBe` 1
+  context "when leaderCommit <= node's commitIndex" $ do
+    let zerothEntry = LogEntry { _Index = 0, _Term = 0, _Command = NoOp }
+        firstEntry = LogEntry { _Index = 1, _Term = 1, _Command = NoOp }
+        secondEntry = LogEntry { _Index = 2, _Term = 1, _Command = NoOp }
+        req = AppendEntriesReq 1 0 AppendEntries { _LeaderTerm = 1
+                                                 , _LeaderId = 1
+                                                 , _PrevLogIndex = 0
+                                                 , _PrevLogTerm = 0
+                                                 , _Entries = [firstEntry, secondEntry]
+                                                 , _LeaderCommit = 0 }
+        res = output mkNode req
+    it "does not modify commitIndex" $ do
+      case res of
+        Just ((_, [msg]), node') -> do
+          msg `shouldBe` AppendEntriesRes 0 1 (1, True)
+          node'^.commitIndex `shouldBe` 0

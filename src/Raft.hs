@@ -36,8 +36,9 @@ handleAppendEntries r = do
             Nothing -> pure (False, "no entry found")
             Just _ -> do
               entryLog %= (\l -> appendEntries l (r ^. entries))
-              when (r ^. leaderCommit > currentCommitIndex) $
-                commitIndex .= min (r ^. leaderCommit) (last log ^. index)
+              when (r ^. leaderCommit > currentCommitIndex) $ do
+                log' <- use entryLog -- fetch the updated log
+                commitIndex .= min (r ^. leaderCommit) (last log' ^. index)
               pure (True, "success")
 
 -- if an existing entry conflicts with a new one (same index, different terms),
