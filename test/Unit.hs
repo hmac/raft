@@ -31,6 +31,7 @@ main :: IO ()
 main = hspec $ do
   testElectionTimeout
   testHeartbeatTimeout
+  testAppendEntries
 
 testElectionTimeout :: Spec
 testElectionTimeout = do
@@ -91,21 +92,57 @@ testHeartbeatTimeout = do
 testAppendEntries :: Spec
 testAppendEntries = do
   let apply cmd = return () :: Maybe ()
-  let mkNode = mkServerState 0 [1] 10 10 NoOp
-  let output node msgIn = runStateT (runWriterT (handleMessage apply msgIn)) node
+      mkNode = mkServerState 0 [1] 10 10 NoOp
+      output node msgIn = runStateT (runWriterT (handleMessage apply msgIn)) node
+      t0 = Term { unTerm = 0 }
+      t1 = Term { unTerm = 1 }
+      t2 = Term { unTerm = 2 }
+      t3 = Term { unTerm = 3 }
   context "when the message's term is less than the node's term" $ do
-    let term = Term { unTerm = 2 }
-    let node = mkNode { _serverTerm = term }
-    let appendEntriesPayload = AppendEntries { _LeaderTerm = Term { unTerm = 1 }
+    let node = mkNode { _serverTerm = t2 }
+        appendEntriesPayload = AppendEntries { _LeaderTerm = t1
                                              , _LeaderId = 1
                                              , _PrevLogIndex = 0
-                                             , _PrevLogTerm = Term { unTerm = 0 }
+                                             , _PrevLogTerm = t0
                                              , _Entries = []
                                              , _LeaderCommit = 0 }
     let req = AppendEntriesReq 1 0 appendEntriesPayload
     it "replies with false" $ do
       case output node req of
-        Just (((), [msg]), node') -> msg `shouldBe` AppendEntriesRes 0 1 (term, False)
+        Just (((), [msg]), node') -> msg `shouldBe` AppendEntriesRes 0 1 (t2, False)
   context "when the log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm" $ do
-    it "cba to write this right now" $ do
-      1 `shouldBe` 1
+    let node = mkNode
+        appendEntriesPayload = AppendEntries { _LeaderTerm = t1
+                                             , _LeaderId = 1
+                                             , _PrevLogIndex = 0
+                                             , _PrevLogTerm = t3
+                                             , _Entries = []
+                                             , _LeaderCommit = 0 }
+        req = AppendEntriesReq 1 0 appendEntriesPayload
+    it "replies with false" $ do
+      case output node req of
+        Just (((), [msg]), node') -> msg `shouldBe` AppendEntriesRes 0 1 (t1, False)
+  context "when the log contains a conflicting entry" $ do
+    let node = mkNode
+        zerothEntry = LogEntry { _Index = 0, _Term = t0, _Command = NoOp }
+        firstEntry = LogEntry { _Index = 1, _Term = t1, _Command = NoOp }
+        secondEntry = LogEntry { _Index = 2, _Term = t1, _Command = NoOp }
+        thirdEntry = LogEntry { _Index = 1, _Term = t3, _Command = NoOp }
+        mkAppendEntries prevIndex es
+          = AppendEntriesReq 1 0 AppendEntries { _LeaderTerm = t1
+                                               , _LeaderId = 1
+                                               , _PrevLogIndex = prevIndex
+                                               , _PrevLogTerm = t0
+                                               , _Entries = es
+                                               , _LeaderCommit = 0 }
+        req1 = mkAppendEntries 0 [firstEntry, secondEntry]
+        req2 = mkAppendEntries 0 [thirdEntry]
+    it "deletes the entry and all that follow it" $ do
+      case output node req1 of
+        Just (((), [msg]), node') -> do
+          node'^.entryLog `shouldBe` [zerothEntry, firstEntry, secondEntry]
+          msg `shouldBe` AppendEntriesRes 0 1 (t1, True)
+          case output node' req2 of
+            Just (_, node'') -> do
+              1 `shouldBe` 1
+              node''^.entryLog `shouldBe` [zerothEntry, thirdEntry]

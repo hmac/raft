@@ -8,6 +8,7 @@ import           Control.Lens
 import           Data.Binary  (Binary)
 import           GHC.Generics (Generic)
 
+-- TODO: derive Num for Term
 newtype Term = Term { unTerm :: Int } deriving (Eq, Ord, Generic)
 
 instance Binary Term
