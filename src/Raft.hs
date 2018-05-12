@@ -98,7 +98,7 @@ convertToFollower leaderTerm = do
 -- send RequestVote RPCs to all other servers
 convertToCandidate :: Monad m => ServerT a m ()
 convertToCandidate = do
-  newTerm <- incTerm <$> use serverTerm
+  newTerm <- (+1) <$> use serverTerm
   ownId <- use selfId
   lastLogEntry <- last <$> use entryLog
   servers <- use serverIds
@@ -129,8 +129,9 @@ sendHeartbeats = do
             AppendEntriesReq from to AppendEntries
               { _LeaderTerm = term
               , _LeaderId = from
+              -- TODO: this looks wrong - it shouldn't always be 0!
               , _PrevLogIndex = 0
-              , _PrevLogTerm = Term { unTerm = 0 }
+              , _PrevLogTerm = 0
               , _Entries = []
               , _LeaderCommit = commitIndex }
 

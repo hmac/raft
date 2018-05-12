@@ -107,15 +107,14 @@ messageRecipient (ClientRequest to _)      = to
 
 mkServer :: ServerId -> [ServerId] -> Int -> Int -> (ServerState Command, StateMachine)
 mkServer self others electionTimeout heartbeatTimeout = (serverState, StateMachine { value = 0 })
-  where t0 = Term { unTerm = 0 }
-        initialMap :: Map.Map ServerId Int
+  where initialMap :: Map.Map ServerId Int
         initialMap = foldl' (\m sid -> Map.insert sid 0 m) Map.empty others
         serverState = ServerState { _selfId = self
                                   , _role = Follower
                                   , _serverIds = others
-                                  , _serverTerm = t0
+                                  , _serverTerm = 0
                                   , _votedFor = Nothing
-                                  , _entryLog = [LogEntry { _Index = 0, _Term = t0, _Command = NoOp }]
+                                  , _entryLog = [LogEntry { _Index = 0, _Term = 0, _Command = NoOp }]
                                   , _commitIndex = 0
                                   , _lastApplied = 0
                                   , _electionTimer = 0

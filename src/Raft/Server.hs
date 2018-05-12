@@ -63,7 +63,7 @@ mkServerState :: ServerId -> [ServerId] -> Tock -> Tock -> a -> ServerState a
 mkServerState self others electionTimeout heartbeatTimeout firstCommand = s
   where s = ServerState { _selfId = self
                         , _serverIds = others
-                        , _serverTerm = t0
+                        , _serverTerm = 0
                         , _votedFor = Nothing
                         , _entryLog = emptyLog
                         , _commitIndex = 0
@@ -76,6 +76,5 @@ mkServerState self others electionTimeout heartbeatTimeout firstCommand = s
                         , _nextIndex = initialMap
                         , _matchIndex = initialMap
                         , _votesReceived = 0 }
-        t0 = Term { unTerm = 0 }
-        emptyLog = [LogEntry { _Index = 0, _Term = t0, _Command = firstCommand }]
+        emptyLog = [LogEntry { _Index = 0, _Term = 0, _Command = firstCommand }]
         initialMap = foldl' (\m sid -> Map.insert sid 0 m) Map.empty others
