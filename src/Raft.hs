@@ -62,8 +62,7 @@ handleRequestVote r = do
   s <- get
   let currentTerm = s ^. serverTerm
       matchingVote = s ^. votedFor == Just (r ^. candidateId)
-      -- N.B. is this the right way to determine up-to-date?
-      logUpToDate = _LastLogIndex r >= s ^. commitIndex
+      logUpToDate = upToDate (r^.lastLogIndex) (r^.lastLogTerm) (s^.entryLog)
   if _CandidateTerm r < currentTerm
      then pure False
      else if (isNothing (s ^. votedFor) || matchingVote) && logUpToDate
@@ -73,6 +72,18 @@ handleRequestVote r = do
      else
        pure False
 
+-- Raft determines which of two logs is more up-to-date by comparing the index
+-- and term of the last entries in the logs. If the logs have last entries with
+-- different terms, then the log with the later term is more up-to-date.
+-- If the logs end with the same term, then whichever log is longer is more
+-- up-to-date.
+upToDate :: LogIndex -> Term -> Log a -> Bool
+upToDate candidateIndex candidateTerm log =
+  case compare candidateTerm (lastEntry^.term) of
+    GT -> True
+    LT -> False
+    EQ -> candidateIndex >= lastEntry^.index
+  where lastEntry = last log
 
 findEntry :: Log a -> LogIndex -> Term -> Maybe (LogEntry a)
 findEntry l i t = case findByIndex l i of
