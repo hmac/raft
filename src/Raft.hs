@@ -13,11 +13,17 @@ import           Data.Maybe                  (fromJust, isNothing)
 import           Data.Ratio                  ((%))
 import           Data.Typeable               (Typeable)
 import           GHC.Generics                (Generic)
-import           Prelude                     hiding (log)
+import           Prelude                     hiding (log, (!!))
+import           Safe                        (atMay)
+import qualified Safe                        (at)
 
 import           Raft.Log
 import           Raft.Rpc
 import           Raft.Server
+
+-- alias Safe.at as !!
+(!!) :: [a] -> Int -> a
+(!!) = Safe.at
 
 -- reply false if term < currentTerm
 -- reply false if log doesn't contain an entry at prevLogIndex whose term
@@ -176,8 +182,11 @@ checkCommitIndex = do
   log <- use entryLog
   let upToDate = Map.size $ Map.filter (>= n) matchIndex
       majorityUpToDate = upToDate % Map.size matchIndex > 1 % 2
-  when (majorityUpToDate && (log !! n) ^. term == currentTerm) $
-    commitIndex .= n
+      entryAtN = atMay log n
+  case entryAtN of
+    Nothing -> return ()
+    Just e -> when (majorityUpToDate && e^.term == currentTerm) $
+              commitIndex .= n
 
 -- if commitIndex > lastApplied:
 --   increment lastApplied
