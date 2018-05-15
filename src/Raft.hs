@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveGeneric      #-}
 {-# LANGUAGE StandaloneDeriving #-}
 
-module Raft where
+module Raft (handleMessage, Message(..)) where
 
 import           Control.Lens                (at, use, (%=), (+=), (.=), (<+=),
                                               (?=), (^.))
@@ -24,6 +24,133 @@ import           Raft.Server
 -- alias Safe.at as !!
 (!!) :: [a] -> Int -> a
 (!!) = Safe.at
+
+data Message a =
+    AppendEntriesReq ServerId ServerId (AppendEntries a)
+  | AppendEntriesRes ServerId ServerId (Term, Bool)
+  | RequestVoteReq ServerId ServerId (RequestVote a)
+  | RequestVoteRes ServerId ServerId (Term, Bool)
+  | Tick ServerId
+  | ClientRequest ServerId a
+  deriving (Generic)
+
+deriving instance Typeable a => Typeable (Message a)
+instance Binary a => Binary (Message a)
+
+deriving instance Show a => Show (Message a)
+deriving instance Eq a => Eq (Message a)
+
+type ServerT a m = WriterT [Message a] (StateT (ServerState a) m)
+
+-- The entrypoint to a Raft node
+-- This function takes a Message and handles it, updating the node's state and
+-- generating any messages to send in response.
+-- This is the only function exported from this module
+handleMessage :: MonadPlus m => (a -> m ()) -> Message a -> ServerT a m ()
+handleMessage apply m = checkForNewLeader m >> handler
+  where
+    handler =
+      case m of
+        Tick _                     -> handleTick apply
+        AppendEntriesReq from to r -> handleAppendEntriesReq from to r
+        AppendEntriesRes from to r -> handleAppendEntriesRes from to r apply
+        RequestVoteReq from to r   -> handleRequestVoteReq from to r
+        RequestVoteRes from to r   -> handleRequestVoteRes from to r
+        ClientRequest _ r          -> handleClientRequest r
+
+checkForNewLeader :: MonadPlus m => Message a -> ServerT a m ()
+checkForNewLeader m =
+  case m of
+    Tick _                      -> pure ()
+    ClientRequest _ _           -> pure ()
+    AppendEntriesReq _ _ r      -> go (r^.leaderTerm)
+    AppendEntriesRes _ _ (t, _) -> go t
+    RequestVoteReq _ _ r        -> go (r^.candidateTerm)
+    RequestVoteRes _ _ (t, _)   -> go t
+  where
+    go :: MonadPlus m => Term -> ServerT a m ()
+    go t = do
+      currentTerm <- use serverTerm
+      when (t > currentTerm) (convertToFollower t)
+
+handleTick :: MonadPlus m => (a -> m ()) -> ServerT a m ()
+handleTick apply = do
+  -- if election timeout elapses without receiving AppendEntries RPC from current
+  -- leader or granting vote to candidate, convert to candidate
+  applyCommittedLogEntries apply
+  electionTimer' <- electionTimer <+= 1
+  heartbeatTimer' <- heartbeatTimer <+= 1
+  role <- use role
+  electTimeout <- use electionTimeout
+  hbTimeout <- use heartbeatTimeout
+  when (electionTimer' >= electTimeout && role /= Leader) convertToCandidate
+  when (heartbeatTimer' >= hbTimeout && role == Leader) sendHeartbeats
+
+handleAppendEntriesReq :: MonadPlus m => ServerId -> ServerId -> AppendEntries a -> ServerT a m ()
+handleAppendEntriesReq from to r = do
+  currentTerm <- use serverTerm
+  (success, _) <- handleAppendEntries r
+  electionTimer .= 0
+  updatedTerm <- use serverTerm
+  tell [AppendEntriesRes to from (updatedTerm, success)]
+
+handleAppendEntriesRes :: MonadPlus m => ServerId -> ServerId -> (Term, Bool) -> (a -> m ()) -> ServerT a m ()
+handleAppendEntriesRes from to (term, success) apply = do
+  isLeader <- (== Leader) <$> use role
+  guard isLeader
+  -- N.B. need to "update nextIndex and matchIndex for follower"
+  -- but not sure what to update it to.
+  -- For now:
+  -- update matchIndex[followerId] = nextIndex[followerId]
+  -- increment nextIndex[followerId]
+  next <- use $ nextIndex . at from
+  match <- use $ matchIndex . at from
+  case (next, match) of
+    (Just n, Just m) -> do
+      let (next', match') = if success then (n + 1, n) else (n - 1, m)
+      nextIndex . at from ?= next'
+      matchIndex . at from ?= match'
+      checkCommitIndex
+      applyCommittedLogEntries apply
+      unless success (sendAppendEntries from next')
+    _ -> error "expected nextIndex and matchIndex to have element!"
+
+handleRequestVoteReq :: MonadPlus m => ServerId -> ServerId -> RequestVote a -> ServerT a m ()
+handleRequestVoteReq from to r = do
+  currentTerm <- gets _serverTerm
+  voteGranted <- handleRequestVote r
+  updatedTerm <- use serverTerm
+  tell [RequestVoteRes to from (updatedTerm, voteGranted)]
+
+handleRequestVoteRes :: MonadPlus m => ServerId -> ServerId -> (Term, Bool) -> ServerT a m ()
+handleRequestVoteRes from to (term, voteGranted) = do
+  currentTerm <- use serverTerm
+  isCandidate <- (== Candidate) <$> use role
+  guard isCandidate
+  when voteGranted $ do
+    votes <- (+1) <$> use votesReceived
+    total <- (+ 1) . length <$> use serverIds
+    votesReceived .= votes
+    when (votes % total > 1 % 2) convertToLeader
+
+handleClientRequest :: MonadPlus m => a -> ServerT a m ()
+handleClientRequest c = do
+  -- TODO: followers should redirect request to leader
+  -- TODO: we should actually respond to the request
+  role <- use role
+  votedFor <- use votedFor
+  case (role, votedFor) of
+    (Leader, _) -> do
+      log <- use entryLog
+      currentTerm <- use serverTerm
+      let nextIndex = length log
+          entry = LogEntry { _Index = nextIndex, _Term = currentTerm, _Command = c }
+      entryLog %= \log -> log ++ [entry]
+      -- broadcast this new entry to followers
+      serverIds <- use serverIds
+      mapM_ (`sendAppendEntries` nextIndex) serverIds
+    (_, Just leader) -> tell [ClientRequest leader c]
+    (_, Nothing) -> pure ()
 
 -- reply false if term < currentTerm
 -- reply false if log doesn't contain an entry at prevLogIndex whose term
@@ -92,11 +219,13 @@ upToDate candidateIndex candidateTerm log =
   where lastEntry = last log
 
 findEntry :: Log a -> LogIndex -> Term -> Maybe (LogEntry a)
-findEntry l i t = case findByIndex l i of
-                            Nothing -> Nothing
-                            Just e -> if e ^. term == t
-                                         then Just e
-                                         else Nothing
+findEntry l i t =
+  case findByIndex l i of
+    Nothing -> Nothing
+    Just e ->
+      if e ^. term == t
+        then Just e
+        else Nothing
 
 findByIndex :: Log a -> LogIndex -> Maybe (LogEntry a)
 findByIndex _ i | i < 0 = Nothing
@@ -183,7 +312,7 @@ checkCommitIndex = do
       majorityUpToDate = upToDate % Map.size matchIndex > 1 % 2
       entryAtN = atMay log n
   case entryAtN of
-    Nothing -> return ()
+    Nothing -> pure ()
     Just e -> when (majorityUpToDate && e^.term == currentTerm) $
               commitIndex .= n
 
@@ -199,93 +328,3 @@ applyCommittedLogEntries apply = do
     lastApplied' <- lastApplied <+= 1
     let entry = fromJust $ findByIndex log lastApplied'
     (lift . lift) $ apply (_Command entry)
-
-data Message a =
-    AppendEntriesReq ServerId ServerId (AppendEntries a)
-  | AppendEntriesRes ServerId ServerId (Term, Bool)
-  | RequestVoteReq ServerId ServerId (RequestVote a)
-  | RequestVoteRes ServerId ServerId (Term, Bool)
-  | Tick ServerId
-  | ClientRequest ServerId a
-  deriving (Generic)
-
-deriving instance Typeable a => Typeable (Message a)
-instance Binary a => Binary (Message a)
-
-deriving instance Show a => Show (Message a)
-deriving instance Eq a => Eq (Message a)
-
-type ServerT a m = WriterT [Message a] (StateT (ServerState a) m)
-
-handleMessage :: MonadPlus m => (a -> m ()) -> Message a -> ServerT a m ()
--- if election timeout elapses without receiving AppendEntries RPC from current
--- leader or granting vote to candidate, convert to candidate
-handleMessage apply (Tick _) = do
-  applyCommittedLogEntries apply
-  electionTimer' <- electionTimer <+= 1
-  heartbeatTimer' <- heartbeatTimer <+= 1
-  role <- use role
-  electTimeout <- use electionTimeout
-  hbTimeout <- use heartbeatTimeout
-  when (electionTimer' >= electTimeout && role /= Leader) convertToCandidate
-  when (heartbeatTimer' >= hbTimeout && role == Leader) sendHeartbeats
-handleMessage _ (AppendEntriesReq from to r) = do
-  currentTerm <- use serverTerm
-  (success, reason) <- handleAppendEntries r
-  electionTimer .= 0
-  when (r ^. leaderTerm > currentTerm) $ convertToFollower (r ^. leaderTerm)
-  updatedTerm <- use serverTerm
-  tell [AppendEntriesRes to from (updatedTerm, success)]
-handleMessage apply (AppendEntriesRes from to (term, success)) = do
-  isLeader <- (== Leader) <$> use role
-  guard isLeader
-  -- N.B. need to "update nextIndex and matchIndex for follower"
-  -- but not sure what to update it to.
-  -- For now:
-  -- update matchIndex[followerId] = nextIndex[followerId]
-  -- increment nextIndex[followerId]
-  next <- use $ nextIndex . at from
-  match <- use $ matchIndex . at from
-  case (next, match) of
-    (Just n, Just m) -> do
-      let (next', match') = if success then (n + 1, n) else (n - 1, m)
-      nextIndex . at from ?= next'
-      matchIndex . at from ?= match'
-      checkCommitIndex
-      applyCommittedLogEntries apply
-      unless success (sendAppendEntries from next')
-    _ -> error "expected nextIndex and matchIndex to have element!"
-handleMessage _ (RequestVoteReq from to r) = do
-  currentTerm <- gets _serverTerm
-  voteGranted <- handleRequestVote r
-  when (r ^. candidateTerm > currentTerm) $ convertToFollower (r ^. candidateTerm)
-  updatedTerm <- use serverTerm
-  tell [RequestVoteRes to from (updatedTerm, voteGranted)]
-handleMessage _ (RequestVoteRes from to (term, voteGranted)) = do
-  currentTerm <- use serverTerm
-  isCandidate <- (== Candidate) <$> use role
-  guard isCandidate
-  if term > currentTerm
-     then convertToFollower term
-     else when voteGranted $ do
-       votes <- (+1) <$> use votesReceived
-       total <- (+ 1) . length <$> use serverIds
-       votesReceived .= votes
-       when (votes % total > 1 % 2) convertToLeader
-handleMessage _ (ClientRequest to c) = do
-  -- TODO: followers should redirect request to leader
-  -- TODO: we should actually respond to the request
-  role <- use role
-  votedFor <- use votedFor
-  case (role, votedFor) of
-    (Leader, _) -> do
-      log <- use entryLog
-      currentTerm <- use serverTerm
-      let nextIndex = length log
-          entry = LogEntry { _Index = nextIndex, _Term = currentTerm, _Command = c }
-      entryLog %= \log -> log ++ [entry]
-      -- broadcast this new entry to followers
-      serverIds <- use serverIds
-      mapM_ (`sendAppendEntries` nextIndex) serverIds
-    (_, Just leader) -> tell [ClientRequest leader c]
-    (_, Nothing) -> pure ()
