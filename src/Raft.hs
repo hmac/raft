@@ -139,19 +139,18 @@ convertToLeader = do
 sendHeartbeats :: Monad m => ServerT a m ()
 sendHeartbeats = do
   servers <- use serverIds
-  term <- use serverTerm
+  currentTerm <- use serverTerm
   selfId <- use selfId
   commitIndex <- use commitIndex
-  tell $ map (\i -> mkHeartbeat selfId i term commitIndex) servers
-    where mkHeartbeat from to term commitIndex =
-            AppendEntriesReq from to AppendEntries
-              { _LeaderTerm = term
-              , _LeaderId = from
-              -- TODO: this looks wrong - it shouldn't always be 0!
-              , _PrevLogIndex = 0
-              , _PrevLogTerm = 0
-              , _Entries = []
-              , _LeaderCommit = commitIndex }
+  log <- use entryLog
+  let lastEntry = last log
+      mkHeartbeat to = AppendEntriesReq selfId to AppendEntries { _LeaderTerm = currentTerm
+                                                                , _LeaderId = selfId
+                                                                , _PrevLogIndex = lastEntry ^. index
+                                                                , _PrevLogTerm = lastEntry ^. term
+                                                                , _Entries = []
+                                                                , _LeaderCommit = commitIndex }
+  tell $ map mkHeartbeat servers
 
 sendAppendEntries :: Monad m => ServerId -> LogIndex -> ServerT a m ()
 sendAppendEntries followerId logIndex = do
