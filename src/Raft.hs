@@ -47,7 +47,7 @@ type ServerT a m = WriterT [Message a] (StateT (ServerState a) m)
 -- generating any messages to send in response.
 -- This is the only function exported from this module
 handleMessage :: MonadPlus m => (a -> m ()) -> Message a -> ServerT a m ()
-handleMessage apply m = checkForNewLeader m >> handler
+handleMessage apply m = checkForNewLeader m >> applyCommittedLogEntries apply >> handler
   where
     handler =
       case m of
@@ -155,7 +155,7 @@ handleClientRequest c = do
 -- reply false if term < currentTerm
 -- reply false if log doesn't contain an entry at prevLogIndex whose term
 --   matches prevLogTerm
--- apply entries to the log
+-- append entries to the log
 -- if leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of
 --   last new entry)
 handleAppendEntries :: Monad m => AppendEntries a -> ServerT a m (Bool, String)
@@ -280,6 +280,7 @@ sendHeartbeats = do
                                                                 , _Entries = []
                                                                 , _LeaderCommit = commitIndex }
   tell $ map mkHeartbeat servers
+  heartbeatTimer .= 0
 
 sendAppendEntries :: Monad m => ServerId -> LogIndex -> ServerT a m ()
 sendAppendEntries followerId logIndex = do
@@ -297,6 +298,7 @@ sendAppendEntries followerId logIndex = do
                          , _LeaderCommit = commitIndex }
       req = AppendEntriesReq selfId followerId ae
   tell [req]
+  heartbeatTimer .= 0
 
 -- if there exists an N such that N > commitIndex, a majority of matchIndex[i]
 --   >= N, and log[N].term == currentTerm: set commitIndex = N
