@@ -1,5 +1,6 @@
 import           Control.Monad.State.Strict
 import           Control.Monad.Writer.Strict
+import           Data.List                   (sortOn)
 import qualified Data.Map.Strict             as Map
 import           Data.Maybe                  (fromJust)
 
@@ -22,50 +23,56 @@ apply (Set i) = put StateMachine { value = i }
 
 main = do
   let s0 :: (ServerState Command, StateMachine)
-      s0 = mkServer 0 [1, 2] 3 2
-      s1 = mkServer 1 [0, 2] 4 2
-      s2 = mkServer 2 [0, 1] 5 2
+      s0 = mkServer 0 [1, 2] 30 20
+      s1 = mkServer 1 [0, 2] 40 20
+      s2 = mkServer 2 [0, 1] 50 20
       servers = Map.insert 2 s2 $ Map.insert 1 s1 $ Map.insert 0 s0 Map.empty
   testLoop servers mkClient
 
 type Client = [(Int, Message Command)]
 
 mkClient :: Client
-mkClient = [(5, ClientRequest 0 (Set 42))
-          , (10, ClientRequest 0 (Set 43))
-          , (15, ClientRequest 0 (Set 7))]
+mkClient = [(500, ClientRequest 0 (Set 42))
+          , (1000, ClientRequest 0 (Set 43))
+          , (1500, ClientRequest 0 (Set 7))
+          , (1521, Tick 1)
+          , (1521, Tick 2)] -- wait for the followers to apply their logs
 
-testLoop :: Map.Map ServerId (ServerState Command, StateMachine) -> Client -> IO ()
+testLoop ::
+     Map.Map ServerId (ServerState Command, StateMachine) -> Client -> IO ()
 testLoop s client = go s 0 client
-  where go servers clock [] = mapM_ sendTick servers
-          where sendTick = undefined
-        go servers clock ((time, msg):queue) = do
-          let r = recipient msg
-              (state, machine) = servers Map.! r
-              run = if time > clock
-                       then handleMessage apply (Tick r) >> handleMessage apply msg
-                       else handleMessage apply (Tick r)
-              res = runStateT (runStateT (runWriterT run) state) machine
-          case res of
-            Just (((_, msgs), state'), machine') -> do
-              let servers' = Map.insert r (state', machine') servers
-              print (Tick r :: Message Int)
-              print msg
-              print state'
-              putStrLn $ show (_selfId state) ++ ": " ++ show machine'
-              go servers' (clock + 1) (queue ++ map (\m -> (clock, m)) msgs)
-            Nothing -> do
-              putStrLn "\n\n"
-              print msg
-              print state
-              print res
-              error "received nothing!"
-
-tickServer :: ServerId -> ServerState Command -> StateMachine -> ([Message Command], (ServerState Command, StateMachine))
-tickServer sid state machine = (msgs, (state', machine'))
-  where msg = Tick sid
-        res = runStateT (runStateT (runWriterT (handleMessage apply msg)) state) machine
-        (((_, msgs), state'), machine') = fromJust res
+  where
+    go servers _ [] =
+      let states = Map.toList $ Map.map snd servers
+      in putStrLn $ "final states: " ++ show states
+    go servers clock queue
+      | any (\(t, _) -> t <= clock) queue = do
+        putStrLn $ "clock: " ++ show clock
+        let (time, msg):queue' = sortOn fst queue
+            r = recipient msg
+            (state, machine) = servers Map.! r
+            run =
+              if time <= clock
+                then handleMessage apply msg
+                else pure ()
+            res = runStateT (runStateT (runWriterT run) state) machine
+        case res of
+          Just (((_, msgs), state'), machine') -> do
+            let servers' = Map.insert r (state', machine') servers
+            print msg
+            putStrLn $ show (_selfId state) ++ ": " ++ show machine'
+            go servers' clock $
+              sortOn fst (queue' ++ map (\m -> (clock, m)) msgs)
+          Nothing -> do
+            putStrLn "" >> putStrLn ""
+            print msg
+            print state
+            print res
+            error "received nothing!"
+    go servers clock queue = go servers (clock + 1) queue'
+      where
+        queue' = sortOn fst (queue ++ ticks)
+        ticks = map ((,) clock . Tick) (Map.keys servers)
 
 recipient :: Message a -> ServerId
 recipient msg =
