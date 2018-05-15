@@ -45,7 +45,7 @@ executables:
 
 tests:
   integration:
-    main:                Spec.hs
+    main:                Integration.hs
     source-dirs:         test
     ghc-options:
     - -threaded
