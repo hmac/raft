@@ -17,7 +17,6 @@ import           Control.Monad.Writer.Strict
 import           Data.Binary                      (Binary)
 import           Data.Foldable                    (foldl')
 import qualified Data.Map.Strict                  as Map
-import           Data.Maybe                       (fromJust)
 import           Data.Typeable                    (Typeable)
 import           GHC.Generics                     (Generic)
 import           Network.Transport.TCP            (createTransport,
@@ -39,7 +38,12 @@ main = do
     s0 <- spawnServer 0 [1, 2] sendPort 20 5
     s1 <- spawnServer 1 [0, 2] sendPort 30 5
     s2 <- spawnServer 2 [0, 1] sendPort 40 5
-    _ <- spawnClient sendPort 0
+    client <- spawnClient sendPort 0
+
+    link s0
+    link s1
+    link s2
+    link client
 
     let phonebook = [(0, s0), (1, s1), (2, s2)]
 
@@ -68,6 +72,7 @@ apply (Set n) = modify' $ \s -> s { value = n }
 spawnServer :: ServerId -> [ServerId] -> SendPort (Raft.Message Command) -> Int -> Int -> Process ProcessId
 spawnServer self others proxy electionTimeout heartbeatTimeout = spawnLocal $ do
   _ <- spawnClock proxy self
+  say $ "I am " ++ show self
   go newServer newStateMachine
   where (newServer, newStateMachine) = mkServer self others electionTimeout heartbeatTimeout
         go s m = do
@@ -79,8 +84,7 @@ spawnServer self others proxy electionTimeout heartbeatTimeout = spawnLocal $ do
           go s' m'
 
 spawnClock :: SendPort (Raft.Message Command) -> ServerId -> Process ProcessId
-spawnClock chan sid = periodically (milliSeconds 500) $ do
-  say $ "sending Tick " ++ show sid
+spawnClock chan sid = periodically (milliSeconds 100) $ do
   sendChan chan (Tick sid)
 
 spawnClient :: SendPort (Raft.Message Command) -> ServerId -> Process ProcessId
@@ -107,21 +111,4 @@ messageRecipient (ClientRequest to _)      = to
 
 mkServer :: ServerId -> [ServerId] -> Int -> Int -> (ServerState Command, StateMachine)
 mkServer self others electionTimeout heartbeatTimeout = (serverState, StateMachine { value = 0 })
-  where initialMap :: Map.Map ServerId Int
-        initialMap = foldl' (\m sid -> Map.insert sid 0 m) Map.empty others
-        serverState = ServerState { _selfId = self
-                                  , _role = Follower
-                                  , _serverIds = others
-                                  , _serverTerm = 0
-                                  , _votedFor = Nothing
-                                  , _entryLog = [LogEntry { _Index = 0, _Term = 0, _Command = NoOp }]
-                                  , _commitIndex = 0
-                                  , _lastApplied = 0
-                                  , _electionTimer = 0
-                                  , _heartbeatTimer = 0
-                                  , _electionTimeout = electionTimeout
-                                  , _heartbeatTimeout = heartbeatTimeout
-                                  , _nextIndex = initialMap
-                                  , _matchIndex = initialMap
-                                  , _votesReceived = 0 }
-
+  where serverState = mkServerState self others electionTimeout heartbeatTimeout NoOp
