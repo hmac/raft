@@ -26,6 +26,8 @@ dependencies:
 - lens
 - binary
 - safe
+- logging-effect
+- text
 
 library:
   source-dirs: src

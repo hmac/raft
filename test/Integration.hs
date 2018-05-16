@@ -1,8 +1,10 @@
+import           Control.Monad.Log
 import           Control.Monad.State.Strict
 import           Control.Monad.Writer.Strict
 import           Data.List                   (sortOn)
 import qualified Data.Map.Strict             as Map
 import           Data.Maybe                  (fromJust)
+import qualified Data.Text.IO                as T (putStrLn)
 
 import           Raft
 import           Raft.Server
@@ -54,10 +56,10 @@ testLoop s client = go s 0 client
             run =
               if time <= clock
                 then handleMessage apply msg
-                else pure ()
-            res = runStateT (runStateT (runWriterT run) state) machine
+                else pure []
+            res = runStateT (runStateT (runPureLoggingT run) state) machine
         case res of
-          Just (((_, msgs), state'), machine') -> do
+          Just (((msgs, logs), state'), machine') -> do
             let servers' = Map.insert r (state', machine') servers
             print msg
             putStrLn $ show (_selfId state) ++ ": " ++ show machine'

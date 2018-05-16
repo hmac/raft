@@ -1,16 +1,19 @@
 {-# LANGUAGE DeriveGeneric      #-}
+{-# LANGUAGE OverloadedStrings  #-}
 {-# LANGUAGE StandaloneDeriving #-}
 
-module Raft (handleMessage, Message(..)) where
+module Raft (handleMessage, Message(..), ServerT) where
 
 import           Control.Lens                (at, use, (%=), (+=), (.=), (<+=),
                                               (?=), (^.))
+import           Control.Monad.Log
 import           Control.Monad.State.Strict
 import           Control.Monad.Writer.Strict
 import           Data.Binary                 (Binary)
 import qualified Data.Map.Strict             as Map
 import           Data.Maybe                  (fromJust, isNothing)
 import           Data.Ratio                  ((%))
+import qualified Data.Text                   as T
 import           Data.Typeable               (Typeable)
 import           GHC.Generics                (Generic)
 import           Prelude                     hiding (log, (!!))
@@ -40,23 +43,25 @@ instance Binary a => Binary (Message a)
 deriving instance Show a => Show (Message a)
 deriving instance Eq a => Eq (Message a)
 
-type ServerT a m = WriterT [Message a] (StateT (ServerState a) m)
+type ExtServerT a m = PureLoggingT [T.Text] (StateT (ServerState a) m)
+type ServerT a m = WriterT [Message a] (ExtServerT a m)
 
 -- The entrypoint to a Raft node
 -- This function takes a Message and handles it, updating the node's state and
 -- generating any messages to send in response.
 -- This is the only function exported from this module
-handleMessage :: MonadPlus m => (a -> m ()) -> Message a -> ServerT a m ()
-handleMessage apply m = checkForNewLeader m >> applyCommittedLogEntries apply >> handler
-  where
-    handler =
-      case m of
-        Tick _                     -> handleTick apply
-        AppendEntriesReq from to r -> handleAppendEntriesReq from to r
-        AppendEntriesRes from to r -> handleAppendEntriesRes from to r apply
-        RequestVoteReq from to r   -> handleRequestVoteReq from to r
-        RequestVoteRes from to r   -> handleRequestVoteRes from to r
-        ClientRequest _ r          -> handleClientRequest r
+handleMessage :: MonadPlus m => (a -> m ()) -> Message a -> ExtServerT a m [Message a]
+handleMessage apply m = snd <$> runWriterT go
+    where
+      go = checkForNewLeader m >> applyCommittedLogEntries apply >> handler
+      handler =
+        case m of
+          Tick _                     -> handleTick apply
+          AppendEntriesReq from to r -> handleAppendEntriesReq from to r
+          AppendEntriesRes from to r -> handleAppendEntriesRes from to r apply
+          RequestVoteReq from to r   -> handleRequestVoteReq from to r
+          RequestVoteRes from to r   -> handleRequestVoteRes from to r
+          ClientRequest _ r          -> handleClientRequest r
 
 checkForNewLeader :: MonadPlus m => Message a -> ServerT a m ()
 checkForNewLeader m =
@@ -89,7 +94,7 @@ handleTick apply = do
 handleAppendEntriesReq :: MonadPlus m => ServerId -> ServerId -> AppendEntries a -> ServerT a m ()
 handleAppendEntriesReq from to r = do
   currentTerm <- use serverTerm
-  (success, _) <- handleAppendEntries r
+  success <- handleAppendEntries r
   electionTimer .= 0
   updatedTerm <- use serverTerm
   tell [AppendEntriesRes to from (updatedTerm, success)]
@@ -131,7 +136,9 @@ handleRequestVoteRes from to (term, voteGranted) = do
     votes <- (+1) <$> use votesReceived
     total <- (+ 1) . length <$> use serverIds
     votesReceived .= votes
-    when (votes % total > 1 % 2) convertToLeader
+    when (votes % total > 1 % 2) $ do
+      logMessage [T.pack $ "obtained " ++ show (votes % total) ++ " majority"]
+      convertToLeader
 
 handleClientRequest :: MonadPlus m => a -> ServerT a m ()
 handleClientRequest c = do
@@ -141,6 +148,7 @@ handleClientRequest c = do
   votedFor <- use votedFor
   case (role, votedFor) of
     (Leader, _) -> do
+      logMessage ["responding to client request"]
       log <- use entryLog
       currentTerm <- use serverTerm
       let nextIndex = length log
@@ -149,8 +157,12 @@ handleClientRequest c = do
       -- broadcast this new entry to followers
       serverIds <- use serverIds
       mapM_ (`sendAppendEntries` nextIndex) serverIds
-    (_, Just leader) -> tell [ClientRequest leader c]
-    (_, Nothing) -> pure ()
+    (_, Just leader) -> do
+      logMessage [T.pack $ "redirecting client request to leader " ++ show leader]
+      tell [ClientRequest leader c]
+    (_, Nothing) -> do
+      logMessage ["received client request but unable to identify leader: dropping request"]
+      pure ()
 
 -- reply false if term < currentTerm
 -- reply false if log doesn't contain an entry at prevLogIndex whose term
@@ -158,21 +170,26 @@ handleClientRequest c = do
 -- append entries to the log
 -- if leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of
 --   last new entry)
-handleAppendEntries :: Monad m => AppendEntries a -> ServerT a m (Bool, String)
+handleAppendEntries :: Monad m => AppendEntries a -> ServerT a m Bool
 handleAppendEntries r = do
   log <- use entryLog
   currentCommitIndex <- use commitIndex
   currentTerm <- use serverTerm
   if r ^. leaderTerm < currentTerm
-     then pure (False, "term < currentTerm")
+     then do
+       logMessage ["AppendEntries denied: term < currentTerm"]
+       pure False
      else case findEntry log (r ^. prevLogIndex) (r ^. prevLogTerm) of
-            Nothing -> pure (False, "no entry found")
+            Nothing -> do
+              logMessage ["AppendEntries denied: no entry found"]
+              pure False
             Just _ -> do
               entryLog %= (\l -> appendEntries l (r ^. entries))
               when (r ^. leaderCommit > currentCommitIndex) $ do
                 log' <- use entryLog -- fetch the updated log
                 commitIndex .= min (r ^. leaderCommit) (last log' ^. index)
-              pure (True, "success")
+              logMessage ["AppendEntries approved"]
+              pure True
 
 -- if an existing entry conflicts with a new one (same index, different terms),
 --   delete the existing entry and all that follow it
@@ -197,13 +214,19 @@ handleRequestVote r = do
       matchingVote = s ^. votedFor == Just (r ^. candidateId)
       logUpToDate = upToDate (r^.lastLogIndex) (r^.lastLogTerm) (s^.entryLog)
   if _CandidateTerm r < currentTerm
-     then pure False
-     else if (isNothing (s ^. votedFor) || matchingVote) && logUpToDate
      then do
-       votedFor .= Just (r ^. candidateId)
-       pure True
-     else
+       logMessage ["RequestVote denied: candidate term < current term"]
        pure False
+     else case (isNothing (s^.votedFor) || matchingVote, logUpToDate) of
+            (True, True) -> do
+              votedFor .= Just (r ^. candidateId)
+              pure True
+            (False, _) -> do
+              logMessage ["RequestVote denied: vote already granted to another candidate"]
+              pure False
+            (_, False) -> do
+              logMessage ["RequestVote denied: candidate's log is not up to date"]
+              pure False
 
 -- Raft determines which of two logs is more up-to-date by comparing the index
 -- and term of the last entries in the logs. If the logs have last entries with
@@ -235,6 +258,7 @@ findByIndex l i = Just $ l !! i
 -- `leaderTerm` is the updated term communicated via an RPC req/res
 convertToFollower :: Monad m => Term -> ServerT a m ()
 convertToFollower leaderTerm = do
+  logMessage ["converting to follower"]
   role .= Follower
   serverTerm .= leaderTerm
   votesReceived .= 0
@@ -245,6 +269,7 @@ convertToFollower leaderTerm = do
 -- send RequestVote RPCs to all other servers
 convertToCandidate :: Monad m => ServerT a m ()
 convertToCandidate = do
+  logMessage ["converting to candidate"]
   newTerm <- (+1) <$> use serverTerm
   ownId <- use selfId
   lastLogEntry <- last <$> use entryLog
@@ -262,11 +287,13 @@ convertToCandidate = do
 -- send initial empty AppendEntries RPCs (hearbeats) to each server
 convertToLeader :: Monad m => ServerT a m ()
 convertToLeader = do
+  logMessage ["converting to leader"]
   role .= Leader
   sendHeartbeats
 
 sendHeartbeats :: Monad m => ServerT a m ()
 sendHeartbeats = do
+  logMessage ["sending heartbeats"]
   servers <- use serverIds
   currentTerm <- use serverTerm
   selfId <- use selfId
@@ -315,7 +342,8 @@ checkCommitIndex = do
       entryAtN = atMay log n
   case entryAtN of
     Nothing -> pure ()
-    Just e -> when (majorityUpToDate && e^.term == currentTerm) $
+    Just e -> when (majorityUpToDate && e^.term == currentTerm) $ do
+              logMessage [T.pack $ "updating commitIndex to " ++ show n]
               commitIndex .= n
 
 -- if commitIndex > lastApplied:
@@ -329,4 +357,5 @@ applyCommittedLogEntries apply = do
   when (lastCommittedIndex > lastAppliedIndex) $ do
     lastApplied' <- lastApplied <+= 1
     let entry = fromJust $ findByIndex log lastApplied'
-    (lift . lift) $ apply (_Command entry)
+    logMessage [T.pack $ "applying entry " ++ show (entry^.index)]
+    (lift . lift . lift) $ apply (_Command entry)

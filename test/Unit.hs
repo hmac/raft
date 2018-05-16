@@ -1,5 +1,6 @@
 import           Control.Lens
 import           Control.Monad.Identity
+import           Control.Monad.Log
 import           Control.Monad.State.Strict
 import           Control.Monad.Writer.Strict
 import           Data.Foldable               (foldl')
@@ -26,8 +27,9 @@ type StateMachineM = StateT StateMachine Maybe
 apply :: Command -> Maybe ()
 apply _ = return ()
 
-sendMsg :: ServerState Command -> Message Command -> Maybe (((), [Message Command]), ServerState Command)
-sendMsg node msgIn = runStateT (runWriterT (handleMessage apply msgIn)) node
+sendMsg :: ServerState Command -> Message Command -> Maybe ([Message Command], ServerState Command)
+sendMsg node msgIn = fmap (\((msgs, _logs), state) -> (msgs, state)) res
+  where res = runStateT (runPureLoggingT (handleMessage apply msgIn)) node
 
 main :: IO ()
 main = hspec $ do
@@ -43,13 +45,13 @@ testElectionTimeout = do
     it "doesn't call an election" $ do
       let timeout = 2
       case sendMsg (mkNode timeout) (Tick 0) of
-        Just (((), msgs), node') -> do
+        Just (msgs, node') -> do
           msgs `shouldBe` []
   context "when a node reaches its election timeout" $ do
     it "calls an election" $ do
       let timeout = 1
       case sendMsg (mkNode timeout) (Tick 0) of
-        Just (((), [msg]), node') -> do
+        Just ([msg], node') -> do
           case msg of
             RequestVoteReq from to rpc -> do
               from `shouldBe` 0
@@ -66,19 +68,19 @@ testHeartbeatTimeout = do
     it "does not send heartbeats" $ do
       let node = (mkNode 1) { _role = Follower }
       case sendMsg node (Tick 0) of
-        Just (((), msgs), node') -> do
+        Just (msgs, node') -> do
           length msgs `shouldBe` 0
   context "when a node is a leader but has not reached its heartbeat timeout" $ do
     it "does not send heartbeats" $ do
       let node = (mkNode 2) { _role = Leader }
       case sendMsg node (Tick 0) of
-        Just (((), msgs), node') -> do
+        Just (msgs, node') -> do
           length msgs `shouldBe` 0
   context "when a node is a leader and has reached its heartbeat timeout" $ do
     it "sends a heartbeat to each server" $ do
       let node = (mkNode 1) { _role = Leader }
       case sendMsg node (Tick 1) of
-        Just (((), [msg]), node') -> do
+        Just ([msg], node') -> do
           case msg of
             AppendEntriesReq 0 1 rpc -> do
               rpc ^. leaderTerm `shouldBe` 0
@@ -103,7 +105,7 @@ testAppendEntries = do
     let req = AppendEntriesReq 1 0 appendEntriesPayload
     it "replies with false" $ do
       case sendMsg node req of
-        Just (((), [msg]), node') -> msg `shouldBe` AppendEntriesRes 0 1 (2, False)
+        Just ([msg], node') -> msg `shouldBe` AppendEntriesRes 0 1 (2, False)
   context "when the log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm" $ do
     let node = mkNode
         appendEntriesPayload = AppendEntries { _LeaderTerm = 1
@@ -115,7 +117,7 @@ testAppendEntries = do
         req = AppendEntriesReq 1 0 appendEntriesPayload
     it "replies with false" $ do
       case sendMsg node req of
-        Just (((), [msg]), node') -> msg `shouldBe` AppendEntriesRes 0 1 (1, False)
+        Just ([msg], node') -> msg `shouldBe` AppendEntriesRes 0 1 (1, False)
   context "when the log contains a conflicting entry" $ do
     let zerothEntry = LogEntry { _Index = 0, _Term = 0, _Command = NoOp }
         firstEntry = LogEntry { _Index = 1, _Term = 1, _Command = NoOp }
@@ -132,7 +134,7 @@ testAppendEntries = do
         req2 = mkAppendEntries 0 [thirdEntry]
     it "deletes the entry and all that follow it" $ do
       case sendMsg mkNode req1 of
-        Just (((), [msg]), node') -> do
+        Just ([msg], node') -> do
           node'^.entryLog `shouldBe` [zerothEntry, firstEntry, secondEntry]
           msg `shouldBe` AppendEntriesRes 0 1 (1, True)
           case sendMsg node' req2 of
@@ -151,7 +153,7 @@ testAppendEntries = do
         req = mkAppendEntries 0 [firstEntry]
     it "appends it to the log" $ do
       case sendMsg mkNode req of
-        Just (((), [msg]), node') -> do
+        Just ([msg], node') -> do
           msg `shouldBe` AppendEntriesRes 0 1 (1, True)
           node'^.entryLog `shouldBe` [zerothEntry, firstEntry]
   context "when leaderCommit > node's commitIndex" $ do
@@ -168,7 +170,7 @@ testAppendEntries = do
     context "and leaderCommit <= index of last new entry" $ do
       it "sets commitIndex = leaderCommit" $ do
         case res of
-          Just ((_, [msg]), node') -> do
+          Just ([msg], node') -> do
             msg `shouldBe` AppendEntriesRes 0 1 (1, True)
             node'^.commitIndex `shouldBe` 1
     context "and leaderCommit > index of last new entry" $ do
@@ -180,7 +182,7 @@ testAppendEntries = do
                                                  , _LeaderCommit = 3 }
       it "sets commitIndex = index of last new entry" $
         case res of
-          Just ((_, [msg]), node') -> do
+          Just ([msg], node') -> do
             msg `shouldBe` AppendEntriesRes 0 1 (1, True)
             node'^.commitIndex `shouldBe` 1
   context "when leaderCommit <= node's commitIndex" $ do
@@ -196,7 +198,7 @@ testAppendEntries = do
         res = sendMsg mkNode req
     it "does not modify commitIndex" $ do
       case res of
-        Just ((_, [msg]), node') -> do
+        Just ([msg], node') -> do
           msg `shouldBe` AppendEntriesRes 0 1 (1, True)
           node'^.commitIndex `shouldBe` 0
 
@@ -211,17 +213,17 @@ testRequestVote = do
     let node = mkNode { _serverTerm = 2 }
     it "replies false" $
       case sendMsg node (req 1 0 0) of
-        Just (((), [msg]), _) -> msg `shouldBe` RequestVoteRes 0 1 (2, False)
+        Just ([msg], _) -> msg `shouldBe` RequestVoteRes 0 1 (2, False)
   context "if votedFor = Nothing" $ do
     let node = mkNode { _serverTerm = 0, _votedFor = Nothing }
     context "and candidate's log is as up-to-date as receiver's log" $
       it "grants vote" $
         case sendMsg node (req 1 0 0) of
-          Just (((), [msg]), _) -> msg `shouldBe` RequestVoteRes 0 1 (1, True)
+          Just ([msg], _) -> msg `shouldBe` RequestVoteRes 0 1 (1, True)
     context "and candidate's log is more up-to-date than receiver's log" $
       it "grants vote" $
         case sendMsg node (req 2 2 2) of
-          Just (((), [msg]), _) -> msg `shouldBe` RequestVoteRes 0 1 (2, True)
+          Just ([msg], _) -> msg `shouldBe` RequestVoteRes 0 1 (2, True)
     context "and candidate's log is not as up-to-date as receiver's log" $ do
       let zerothEntry = LogEntry { _Index = 0, _Term = 0, _Command = NoOp }
           firstEntry = LogEntry { _Index = 1, _Term = 1, _Command = NoOp }
@@ -229,17 +231,17 @@ testRequestVote = do
           node' = node { _serverTerm = 1, _entryLog = log }
       it "does not grant vote" $ do
         case sendMsg node' (req 1 0 0) of
-          Just (((), [msg]), _) -> msg `shouldBe` RequestVoteRes 0 1 (1, False)
+          Just ([msg], _) -> msg `shouldBe` RequestVoteRes 0 1 (1, False)
   context "if votedFor = candidateId" $ do
     let node = mkNode { _serverTerm = 0, _votedFor = Just 1 }
     context "and candidate's log is as up-to-date as receiver's log" $
       it "grants vote" $
         case sendMsg node (req 1 0 0) of
-          Just (((), [msg]), _) -> msg `shouldBe` RequestVoteRes 0 1 (1, True)
+          Just ([msg], _) -> msg `shouldBe` RequestVoteRes 0 1 (1, True)
     context "and candidate's log is more up-to-date than receiver's log" $
       it "grants vote" $
         case sendMsg node (req 2 2 2) of
-          Just (((), [msg]), _) -> msg `shouldBe` RequestVoteRes 0 1 (2, True)
+          Just ([msg], _) -> msg `shouldBe` RequestVoteRes 0 1 (2, True)
     context "and candidate's log is not as up-to-date as receiver's log" $ do
       let zerothEntry = LogEntry { _Index = 0, _Term = 0, _Command = NoOp }
           firstEntry = LogEntry { _Index = 1, _Term = 1, _Command = NoOp }
@@ -247,9 +249,9 @@ testRequestVote = do
           node' = node { _serverTerm = 1, _entryLog = log }
       it "does not grant vote" $
         case sendMsg node' (req 1 0 0) of
-          Just (((), [msg]), _) -> msg `shouldBe` RequestVoteRes 0 1 (1, False)
+          Just ([msg], _) -> msg `shouldBe` RequestVoteRes 0 1 (1, False)
   context "if votedFor = some other candidate id" $ do
     let node = mkNode { _serverTerm = 0, _votedFor = Just 2 }
     it "does not grant vote" $
       case sendMsg node (req 1 0 0) of
-        Just (((), [msg]), _) -> msg `shouldBe` RequestVoteRes 0 1 (1, False)
+        Just ([msg], _) -> msg `shouldBe` RequestVoteRes 0 1 (1, False)
