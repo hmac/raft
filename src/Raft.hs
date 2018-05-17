@@ -151,7 +151,7 @@ handleClientRequest c = do
       logMessage ["responding to client request"]
       log <- use entryLog
       currentTerm <- use serverTerm
-      let nextIndex = length log
+      let nextIndex = toInteger $ length log
           entry = LogEntry { _Index = nextIndex, _Term = currentTerm, _Command = c }
       entryLog %= \log -> log ++ [entry]
       -- broadcast this new entry to followers
@@ -252,8 +252,8 @@ findEntry l i t =
 
 findByIndex :: Log a -> LogIndex -> Maybe (LogEntry a)
 findByIndex _ i | i < 0 = Nothing
-findByIndex l i | i > length l = Nothing
-findByIndex l i = Just $ l !! i
+findByIndex l i | i > toInteger (length l) = Nothing
+findByIndex l i = Just $ l !! fromInteger i
 
 -- `leaderTerm` is the updated term communicated via an RPC req/res
 convertToFollower :: Monad m => Term -> ServerT a m ()
@@ -315,8 +315,8 @@ sendAppendEntries followerId logIndex = do
   selfId <- use selfId
   log <- use entryLog
   commitIndex <- use commitIndex
-  let entry = log !! logIndex
-      prevEntry = log !! (logIndex - 1)
+  let entry = log !! fromInteger logIndex
+      prevEntry = log !! fromInteger (logIndex - 1)
       ae = AppendEntries { _LeaderTerm = currentTerm
                          , _LeaderId = selfId
                          , _PrevLogIndex = prevEntry ^. index
@@ -339,7 +339,7 @@ checkCommitIndex = do
   log <- use entryLog
   let upToDate = Map.size $ Map.filter (>= n) matchIndex
       majorityUpToDate = upToDate % Map.size matchIndex > 1 % 2
-      entryAtN = atMay log n
+      entryAtN = atMay log (fromInteger n)
   case entryAtN of
     Nothing -> pure ()
     Just e -> when (majorityUpToDate && e^.term == currentTerm) $ do

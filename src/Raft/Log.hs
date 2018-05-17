@@ -9,7 +9,7 @@ import           Control.Lens
 import           Data.Binary  (Binary)
 import           GHC.Generics (Generic)
 
-newtype Term = Term { unTerm :: Int } deriving (Eq, Ord, Generic, Num)
+newtype Term = Term { unTerm :: Integer } deriving (Eq, Ord, Generic, Num)
 
 instance Binary Term
 
@@ -18,7 +18,7 @@ instance Show Term where
 
 -- needs to be 1-indexed - maybe use something other than a list?
 type Log a = [LogEntry a]
-type LogIndex = Int
+type LogIndex = Integer
 
 data LogEntry a = LogEntry
   { _Index   :: LogIndex
