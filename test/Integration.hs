@@ -31,7 +31,7 @@ main = do
       servers = Map.insert 2 s2 $ Map.insert 1 s1 $ Map.insert 0 s0 Map.empty
   testLoop servers mkClient
 
-type Client = [(Int, Message Command)]
+type Client = [(Integer, Message Command)]
 
 mkClient :: Client
 mkClient = [(500, ClientRequest 0 (Set 42))
@@ -86,6 +86,6 @@ recipient msg =
     (RequestVoteRes _ to _)   -> to
     (ClientRequest to _)      -> to
 
-mkServer :: ServerId -> [ServerId] -> Int -> Int -> (ServerState Command, StateMachine)
+mkServer :: ServerId -> [ServerId] -> Integer -> Integer -> (ServerState Command, StateMachine)
 mkServer serverId otherServerIds electionTimeout heartbeatTimeout = (serverState, StateMachine { value = 0 })
   where serverState = mkServerState serverId otherServerIds electionTimeout heartbeatTimeout NoOp

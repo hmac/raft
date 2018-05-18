@@ -18,7 +18,7 @@ newtype ServerId = ServerId
   { unServerId :: Int
   } deriving (Eq, Num, Show, Hashable, Typeable, Binary)
 
-type Tock = Int
+type Tock = Integer
 
 data Role = Follower | Candidate | Leader deriving (Eq, Show)
 
