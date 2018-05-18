@@ -18,7 +18,7 @@ newtype ServerId = ServerId
   { unServerId :: Int
   } deriving (Eq, Num, Show, Hashable, Typeable, Binary)
 
-type Tock = Integer
+type MonotonicCounter = Integer
 
 data Role = Follower | Candidate | Leader deriving (Eq, Show)
 
@@ -42,14 +42,14 @@ data ServerState a = ServerState
   , _lastApplied      :: LogIndex
   -- an arbitrary counter used for timeouts (initialised to 0, increases
   -- monotonically)
-  , _electionTimer    :: Tock
+  , _electionTimer    :: MonotonicCounter
   -- value of _electionTimer at which server becomes candidate
-  , _electionTimeout  :: Tock
+  , _electionTimeout  :: MonotonicCounter
   -- an arbitrary counter used for hearbeats (initialised to 0, increases
   -- monotonically)
-  , _heartbeatTimer   :: Tock
+  , _heartbeatTimer   :: MonotonicCounter
   -- value of _heartbeatTimer at which leader will send heartbeat RFCs
-  , _heartbeatTimeout :: Tock
+  , _heartbeatTimeout :: MonotonicCounter
   -- current role
   , _role             :: Role
   -- [LEADER] for each server, index of the next log entry to send to that server
@@ -67,7 +67,7 @@ deriving instance (Show a) => Show (ServerState a)
 
 makeLenses ''ServerState
 
-mkServerState :: ServerId -> [ServerId] -> Tock -> Tock -> a -> ServerState a
+mkServerState :: ServerId -> [ServerId] -> MonotonicCounter -> MonotonicCounter -> a -> ServerState a
 mkServerState self others electionTimeout heartbeatTimeout firstCommand = s
   where s = ServerState { _selfId = self
                         , _serverIds = others
