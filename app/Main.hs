@@ -72,19 +72,28 @@ apply :: Monad m => Command -> StateMachineT m ()
 apply NoOp    = pure ()
 apply (Set n) = modify' $ \s -> s { value = n }
 
-spawnServer :: ServerId -> [ServerId] -> SendPort (Raft.Message Command) -> Integer -> Integer -> Process ProcessId
-spawnServer self others proxy electionTimeout heartbeatTimeout = spawnLocal $ do
-  _ <- spawnClock proxy self
-  say $ "I am " ++ show self
-  go newServer newStateMachine
-  where (newServer, newStateMachine) = mkServer self others electionTimeout heartbeatTimeout
-        go s m = do
-          msg <- expect
-          (msgs, logs, s', m') <- liftIO $ processMessage s m msg
-          mapM_ (say . T.unpack) logs
-          mapM_ (sendChan proxy) msgs
-          say (show m')
-          go s' m'
+spawnServer ::
+     ServerId
+  -> [ServerId]
+  -> SendPort (Raft.Message Command)
+  -> MonotonicCounter
+  -> MonotonicCounter
+  -> Process ProcessId
+spawnServer self others proxy electionTimeout heartbeatTimeout =
+  spawnLocal $ do
+    _ <- spawnClock proxy self
+    say $ "I am " ++ show self
+    go newServer newStateMachine
+  where
+    (newServer, newStateMachine) =
+      mkServer self others electionTimeout heartbeatTimeout
+    go s m = do
+      msg <- expect
+      (msgs, logs, s', m') <- liftIO $ processMessage s m msg
+      mapM_ (say . T.unpack) logs
+      mapM_ (sendChan proxy) msgs
+      say (show m')
+      go s' m'
 
 spawnClock :: SendPort (Raft.Message Command) -> ServerId -> Process ProcessId
 spawnClock chan sid = periodically (milliSeconds 100) $ do
@@ -118,6 +127,14 @@ messageRecipient (RequestVoteRes _ to _)   = to
 messageRecipient (Tick to)                 = to
 messageRecipient (ClientRequest to _)      = to
 
-mkServer :: ServerId -> [ServerId] -> Integer -> Integer -> (ServerState Command, StateMachine)
-mkServer self others electionTimeout heartbeatTimeout = (serverState, StateMachine { value = 0 })
-  where serverState = mkServerState self others electionTimeout heartbeatTimeout NoOp
+mkServer ::
+     ServerId
+  -> [ServerId]
+  -> MonotonicCounter
+  -> MonotonicCounter
+  -> (ServerState Command, StateMachine)
+mkServer self others electionTimeout heartbeatTimeout =
+  (serverState, StateMachine {value = 0})
+  where
+    serverState =
+      mkServerState self others electionTimeout heartbeatTimeout NoOp

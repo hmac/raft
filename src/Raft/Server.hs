@@ -18,7 +18,9 @@ newtype ServerId = ServerId
   { unServerId :: Int
   } deriving (Eq, Num, Show, Hashable, Typeable, Binary)
 
-type MonotonicCounter = Integer
+newtype MonotonicCounter = MonotonicCounter
+  { unMonotonicCounter :: Integer
+  } deriving (Eq, Ord, Num, Show)
 
 data Role = Follower | Candidate | Leader deriving (Eq, Show)
 

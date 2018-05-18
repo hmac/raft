@@ -86,6 +86,19 @@ recipient msg =
     (RequestVoteRes _ to _)   -> to
     (ClientRequest to _)      -> to
 
-mkServer :: ServerId -> [ServerId] -> Integer -> Integer -> (ServerState Command, StateMachine)
-mkServer serverId otherServerIds electionTimeout heartbeatTimeout = (serverState, StateMachine { value = 0 })
-  where serverState = mkServerState serverId otherServerIds electionTimeout heartbeatTimeout NoOp
+mkServer ::
+     ServerId
+  -> [ServerId]
+  -> MonotonicCounter
+  -> MonotonicCounter
+  -> (ServerState Command, StateMachine)
+mkServer serverId otherServerIds electionTimeout heartbeatTimeout =
+  (serverState, StateMachine {value = 0})
+  where
+    serverState =
+      mkServerState
+        serverId
+        otherServerIds
+        electionTimeout
+        heartbeatTimeout
+        NoOp
