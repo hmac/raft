@@ -1,8 +1,8 @@
 import           Control.Monad.Log
 import           Control.Monad.State.Strict
 import           Control.Monad.Writer.Strict
+import qualified Data.HashMap.Strict         as Map
 import           Data.List                   (sortOn)
-import qualified Data.Map.Strict             as Map
 import           Data.Maybe                  (fromJust)
 import qualified Data.Text.IO                as T (putStrLn)
 
@@ -41,7 +41,7 @@ mkClient = [(500, ClientRequest 0 (Set 42))
           , (1521, Tick 2)] -- wait for the followers to apply their logs
 
 testLoop ::
-     Map.Map ServerId (ServerState Command, StateMachine) -> Client -> IO ()
+     Map.HashMap ServerId (ServerState Command, StateMachine) -> Client -> IO ()
 testLoop s client = go s 0 client
   where
     go servers _ [] =
@@ -86,6 +86,6 @@ recipient msg =
     (RequestVoteRes _ to _)   -> to
     (ClientRequest to _)      -> to
 
-mkServer :: Int -> [ServerId] -> Int -> Int -> (ServerState Command, StateMachine)
+mkServer :: ServerId -> [ServerId] -> Int -> Int -> (ServerState Command, StateMachine)
 mkServer serverId otherServerIds electionTimeout heartbeatTimeout = (serverState, StateMachine { value = 0 })
   where serverState = mkServerState serverId otherServerIds electionTimeout heartbeatTimeout NoOp

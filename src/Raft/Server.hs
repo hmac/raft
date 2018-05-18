@@ -1,15 +1,23 @@
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TemplateHaskell    #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE StandaloneDeriving         #-}
+{-# LANGUAGE TemplateHaskell            #-}
 
 module Raft.Server where
 
 import           Control.Lens
-import           Data.Foldable   (foldl')
-import qualified Data.Map.Strict as Map
+import           Data.Binary         (Binary)
+import           Data.Foldable       (foldl')
+import           Data.Hashable       (Hashable)
+import qualified Data.HashMap.Strict as Map
+import           Data.Typeable       (Typeable)
+
 import           Raft.Log
 
 -- Server IDs start at 0 and increase monotonically
-type ServerId = Int
+newtype ServerId = ServerId
+  { unServerId :: Int
+  } deriving (Eq, Num, Show, Hashable, Typeable, Binary)
+
 type Tock = Int
 
 data Role = Follower | Candidate | Leader deriving (Eq, Show)
@@ -46,10 +54,10 @@ data ServerState a = ServerState
   , _role             :: Role
   -- [LEADER] for each server, index of the next log entry to send to that server
   -- (initialised to last log index + 1)
-  , _nextIndex        :: Map.Map ServerId LogIndex
+  , _nextIndex        :: Map.HashMap ServerId LogIndex
   -- [LEADER] for each server, index of the highest log entry known to be replicated on
   -- server (initialised to 0, increases monotonically)
-  , _matchIndex       :: Map.Map ServerId LogIndex
+  , _matchIndex       :: Map.HashMap ServerId LogIndex
   -- [CANDIDATE] the number of votes received (initialised to 0, increases
   -- monotonically)
   , _votesReceived    :: Int

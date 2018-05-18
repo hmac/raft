@@ -10,7 +10,7 @@ import           Control.Monad.Log
 import           Control.Monad.State.Strict
 import           Control.Monad.Writer.Strict
 import           Data.Binary                 (Binary)
-import qualified Data.Map.Strict             as Map
+import qualified Data.HashMap.Strict         as Map
 import           Data.Maybe                  (fromJust, isNothing)
 import           Data.Ratio                  ((%))
 import qualified Data.Text                   as T

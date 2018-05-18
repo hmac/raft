@@ -7,7 +7,9 @@ to be `IO`.
 
 The function signature is as follows
 ```haskell
-handleMessage :: MonadPlus m => (a -> m ()) -> Message a -> ExtServerT a m [Message a]
+handleMessage :: MonadPlus m => (a -> m ())
+                             -> Message a
+                             -> ExtServerT a m [Message a]
 ```
 
 Roughly, this says that the function takes a `Message` and returns an
@@ -34,9 +36,9 @@ entirely pure, the evolution of time must be communicated to the node via a
 message. This makes it possible to test all sorts of different time-based
 scenarios, such as slow clocks, out of sync clocks, network latency, etc.
 
-On top of this library, there's a working example that uses Cloud Haskell to create
-three independent Raft nodes which communicate entirely via `Message`s. Each
-node is paired with a 'clock' process which provides `Tick`s for it.
+On top of this library, there's a working example that uses Cloud Haskell to
+create three independent Raft nodes which communicate entirely via `Message`s.
+Each node is paired with a 'clock' process which provides `Tick`s for it.
 
 ## Implemented features
 - A working implementation of the core algorithm (log replication and leader
