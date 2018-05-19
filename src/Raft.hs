@@ -1,6 +1,7 @@
-{-# LANGUAGE DeriveGeneric      #-}
-{-# LANGUAGE OverloadedStrings  #-}
-{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE DeriveGeneric              #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE OverloadedStrings          #-}
+{-# LANGUAGE StandaloneDeriving         #-}
 
 module Raft (handleMessage, Message(..), ServerT) where
 
@@ -34,7 +35,8 @@ data Message a =
   | RequestVoteReq ServerId ServerId (RequestVote a)
   | RequestVoteRes ServerId ServerId (Term, Bool)
   | Tick ServerId
-  | ClientRequest ServerId a
+  | ClientRequest ServerId RequestId a
+  | ClientResponse ServerId RequestId a Bool
   deriving (Generic)
 
 deriving instance Typeable a => Typeable (Message a)
@@ -61,13 +63,13 @@ handleMessage apply m = snd <$> runWriterT go
           AppendEntriesRes from to r -> handleAppendEntriesRes from to r apply
           RequestVoteReq from to r   -> handleRequestVoteReq from to r
           RequestVoteRes from to r   -> handleRequestVoteRes from to r
-          ClientRequest _ r          -> handleClientRequest r
+          ClientRequest _ reqId r          -> handleClientRequest reqId r
 
 checkForNewLeader :: MonadPlus m => Message a -> ServerT a m ()
 checkForNewLeader m =
   case m of
     Tick _                      -> pure ()
-    ClientRequest _ _           -> pure ()
+    ClientRequest {}            -> pure ()
     AppendEntriesReq _ _ r      -> go (r^.leaderTerm)
     AppendEntriesRes _ _ (t, _) -> go t
     RequestVoteReq _ _ r        -> go (r^.candidateTerm)
@@ -140,28 +142,33 @@ handleRequestVoteRes from to (term, voteGranted) = do
       logMessage [T.pack $ "obtained " ++ show (votes % total) ++ " majority"]
       convertToLeader
 
-handleClientRequest :: MonadPlus m => a -> ServerT a m ()
-handleClientRequest c = do
+handleClientRequest :: MonadPlus m => RequestId -> a -> ServerT a m ()
+handleClientRequest reqId c = do
   -- TODO: followers should redirect request to leader
   -- TODO: we should actually respond to the request
   role <- use role
   votedFor <- use votedFor
+  self <- use selfId
   case (role, votedFor) of
     (Leader, _) -> do
       logMessage ["responding to client request"]
       log <- use entryLog
       currentTerm <- use serverTerm
       let nextIndex = toInteger $ length log
-          entry = LogEntry { _Index = nextIndex, _Term = currentTerm, _Command = c }
+          entry = LogEntry { _Index = nextIndex
+                           , _Term = currentTerm
+                           , _Command = c
+                           , _RequestId = reqId}
       entryLog %= \log -> log ++ [entry]
       -- broadcast this new entry to followers
       serverIds <- use serverIds
       mapM_ (`sendAppendEntries` nextIndex) serverIds
     (_, Just leader) -> do
       logMessage [T.pack $ "redirecting client request to leader " ++ show leader]
-      tell [ClientRequest leader c]
+      tell [ClientRequest leader reqId c]
     (_, Nothing) -> do
-      logMessage ["received client request but unable to identify leader: dropping request"]
+      logMessage ["received client request but unable to identify leader: failing request"]
+      tell [ClientResponse self reqId c False]
       pure ()
 
 -- reply false if term < currentTerm
@@ -349,13 +356,16 @@ checkCommitIndex = do
 -- if commitIndex > lastApplied:
 --   increment lastApplied
 --   apply log[lastApplied] to state machine
+--   broadcast "log applied" event (this is a form of client response)
 applyCommittedLogEntries :: Monad m => (a -> m ()) -> ServerT a m ()
 applyCommittedLogEntries apply = do
   lastAppliedIndex <- use lastApplied
   lastCommittedIndex <- use commitIndex
   log <- use entryLog
+  self <- use selfId
   when (lastCommittedIndex > lastAppliedIndex) $ do
     lastApplied' <- lastApplied <+= 1
     let entry = fromJust $ findByIndex log lastApplied'
     logMessage [T.pack $ "applying entry " ++ show (entry^.index)]
     (lift . lift . lift) $ apply (_Command entry)
+    tell [ClientResponse self (entry^.requestId) (entry^.command) True]

@@ -6,8 +6,9 @@
 module Raft.Log where
 
 import           Control.Lens
-import           Data.Binary  (Binary)
-import           GHC.Generics (Generic)
+import           Data.Binary   (Binary)
+import           Data.Typeable (Typeable)
+import           GHC.Generics  (Generic)
 
 newtype Term = Term { unTerm :: Integer } deriving (Eq, Ord, Generic, Num)
 
@@ -20,10 +21,16 @@ instance Show Term where
 type Log a = [LogEntry a]
 type LogIndex = Integer
 
+-- The ID of a client request
+newtype RequestId = RequestId
+  { unRequestId :: Integer
+  } deriving (Eq, Num, Show, Typeable, Binary)
+
 data LogEntry a = LogEntry
-  { _Index   :: LogIndex
-  , _Term    :: Term
-  , _Command :: a
+  { _Index     :: LogIndex
+  , _Term      :: Term
+  , _Command   :: a
+  , _RequestId :: RequestId
   } deriving (Generic)
 
 instance Binary a => Binary (LogEntry a)

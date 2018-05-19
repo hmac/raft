@@ -86,5 +86,5 @@ mkServerState self others electionTimeout heartbeatTimeout firstCommand = s
                         , _nextIndex = initialMap
                         , _matchIndex = initialMap
                         , _votesReceived = 0 }
-        emptyLog = [LogEntry { _Index = 0, _Term = 0, _Command = firstCommand }]
+        emptyLog = [LogEntry { _Index = 0, _Term = 0, _Command = firstCommand, _RequestId = 0 }]
         initialMap = foldl' (\m sid -> Map.insert sid 0 m) Map.empty others

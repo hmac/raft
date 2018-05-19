@@ -4,6 +4,7 @@
 module Main where
 
 import           Raft
+import           Raft.Log                         (RequestId (..))
 import           Raft.Server
 
 import           Timer                            (milliSeconds, periodically)
@@ -25,12 +26,6 @@ import           GHC.Generics                     (Generic)
 import           Network.Transport.TCP            (createTransport,
                                                    defaultTCPParameters)
 
-replyBack :: (ProcessId, Raft.Message Int) -> Process ()
-replyBack (sender, msg) = send sender msg
-
-logMessage :: Raft.Message Int -> Process ()
-logMessage msg = say $ "handling " ++ show msg
-
 main :: IO ()
 main = do
   Right t <- createTransport "127.0.0.1" "10501" defaultTCPParameters
@@ -38,9 +33,9 @@ main = do
   _ <- runProcess node $ do
     (sendPort, recvPort) <- newChan :: Process (SendPort (Raft.Message Command), ReceivePort (Raft.Message Command))
 
-    s0 <- spawnServer 0 [1, 2] sendPort 20 5
-    s1 <- spawnServer 1 [0, 2] sendPort 30 5
-    s2 <- spawnServer 2 [0, 1] sendPort 40 5
+    s0 <- spawnServer 0 [1, 2] sendPort 10 5
+    s1 <- spawnServer 1 [0, 2] sendPort 20 6
+    s2 <- spawnServer 2 [0, 1] sendPort 30 7
     client <- spawnClient sendPort 0
 
     link s0
@@ -48,7 +43,7 @@ main = do
     link s2
     link client
 
-    let phonebook = [(0, s0), (1, s1), (2, s2)]
+    let phonebook = [(0, s0), (1, s1), (2, s2), (3, client)]
 
     forever $ do
       m <- receiveChanTimeout 1000000 recvPort
@@ -92,7 +87,6 @@ spawnServer self others proxy electionTimeout heartbeatTimeout =
       (msgs, logs, s', m') <- liftIO $ processMessage s m msg
       mapM_ (say . T.unpack) logs
       mapM_ (sendChan proxy) msgs
-      say (show m')
       go s' m'
 
 spawnClock :: SendPort (Raft.Message Command) -> ServerId -> Process ProcessId
@@ -101,10 +95,18 @@ spawnClock chan sid = periodically (milliSeconds 100) $ do
 
 spawnClient :: SendPort (Raft.Message Command) -> ServerId -> Process ProcessId
 spawnClient chan sid = spawnLocal $ liftIO (threadDelay 5) >> go 1
-  where go n = do
-          liftIO $ threadDelay 2000000 -- 2 seconds
-          sendChan chan (ClientRequest sid (Set n))
-          go (n + 1)
+  where
+    go n = do
+      liftIO $ threadDelay 2000000 -- 2 seconds
+      sendChan chan (ClientRequest sid (RequestId (toInteger n)) (Set n))
+      msg <- expect
+      handleResponse msg
+      go (n + 1)
+    handleResponse :: Raft.Message Command -> Process ()
+    handleResponse (ClientResponse sid reqId cmd success) =
+      if success
+        then say (show cmd)
+        else say $ "command failed: " ++ show cmd
 
 processMessage ::
      ServerState Command
@@ -125,7 +127,8 @@ messageRecipient (AppendEntriesRes _ to _) = to
 messageRecipient (RequestVoteReq _ to _)   = to
 messageRecipient (RequestVoteRes _ to _)   = to
 messageRecipient (Tick to)                 = to
-messageRecipient (ClientRequest to _)      = to
+messageRecipient (ClientRequest to _ _)    = to
+messageRecipient ClientResponse {}         = 3 -- client hardcoded to 3
 
 mkServer ::
      ServerId
