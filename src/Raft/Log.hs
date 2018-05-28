@@ -7,6 +7,7 @@ module Raft.Log where
 
 import           Control.Lens
 import           Data.Binary   (Binary)
+import           Data.Hashable (Hashable)
 import           Data.Typeable (Typeable)
 import           GHC.Generics  (Generic)
 
@@ -24,7 +25,7 @@ type LogIndex = Integer
 -- The ID of a client request
 newtype RequestId = RequestId
   { unRequestId :: Integer
-  } deriving (Eq, Num, Show, Typeable, Binary)
+  } deriving (Eq, Num, Show, Typeable, Binary, Hashable)
 
 data LogEntry a = LogEntry
   { _Index     :: LogIndex
