@@ -1,11 +1,6 @@
 import           Control.Lens
-import           Control.Monad.Identity
 import           Control.Monad.Log
 import           Control.Monad.State.Strict
-import           Control.Monad.Writer.Strict
-import           Data.Foldable               (foldl')
-import qualified Data.Map.Strict             as Map
-import           Data.Maybe                  (fromJust)
 
 import           Raft
 import           Raft.Log
@@ -37,6 +32,9 @@ main = hspec $ do
   testHeartbeatTimeout
   testAppendEntries
   testRequestVote
+
+mkLogEntry :: LogIndex -> Term -> LogEntry Command
+mkLogEntry index term = LogEntry { _Index = index, _Term = term, _Command = NoOp, _RequestId = 0 }
 
 testElectionTimeout :: Spec
 testElectionTimeout = do
@@ -119,10 +117,10 @@ testAppendEntries = do
       case sendMsg node req of
         Just ([msg], node') -> msg `shouldBe` AppendEntriesRes 0 1 (1, False)
   context "when the log contains a conflicting entry" $ do
-    let zerothEntry = LogEntry { _Index = 0, _Term = 0, _Command = NoOp }
-        firstEntry = LogEntry { _Index = 1, _Term = 1, _Command = NoOp }
-        secondEntry = LogEntry { _Index = 2, _Term = 1, _Command = NoOp }
-        thirdEntry = LogEntry { _Index = 1, _Term = 3, _Command = NoOp }
+    let zerothEntry = mkLogEntry 0 0
+        firstEntry = mkLogEntry 1 1
+        secondEntry = mkLogEntry 2 1
+        thirdEntry = mkLogEntry 1 3
         mkAppendEntries prevIndex es
           = AppendEntriesReq 1 0 AppendEntries { _LeaderTerm = 1
                                                , _LeaderId = 1
@@ -141,8 +139,8 @@ testAppendEntries = do
             Just (_, node'') -> do
               node''^.entryLog `shouldBe` [zerothEntry, thirdEntry]
   context "when the log contains a valid entry" $ do
-    let zerothEntry = LogEntry { _Index = 0, _Term = 0, _Command = NoOp }
-        firstEntry = LogEntry { _Index = 1, _Term = 1, _Command = NoOp }
+    let zerothEntry = mkLogEntry 0 0
+        firstEntry = mkLogEntry 1 1
         mkAppendEntries prevIndex es
           = AppendEntriesReq 1 0 AppendEntries { _LeaderTerm = 1
                                                , _LeaderId = 1
@@ -157,9 +155,9 @@ testAppendEntries = do
           msg `shouldBe` AppendEntriesRes 0 1 (1, True)
           node'^.entryLog `shouldBe` [zerothEntry, firstEntry]
   context "when leaderCommit > node's commitIndex" $ do
-    let zerothEntry = LogEntry { _Index = 0, _Term = 0, _Command = NoOp }
-        firstEntry = LogEntry { _Index = 1, _Term = 1, _Command = NoOp }
-        secondEntry = LogEntry { _Index = 2, _Term = 1, _Command = NoOp }
+    let zerothEntry = mkLogEntry 0 0
+        firstEntry = mkLogEntry 1 1
+        secondEntry = mkLogEntry 2 1
         req = AppendEntriesReq 1 0 AppendEntries { _LeaderTerm = 1
                                                  , _LeaderId = 1
                                                  , _PrevLogIndex = 0
@@ -186,9 +184,9 @@ testAppendEntries = do
             msg `shouldBe` AppendEntriesRes 0 1 (1, True)
             node'^.commitIndex `shouldBe` 1
   context "when leaderCommit <= node's commitIndex" $ do
-    let zerothEntry = LogEntry { _Index = 0, _Term = 0, _Command = NoOp }
-        firstEntry = LogEntry { _Index = 1, _Term = 1, _Command = NoOp }
-        secondEntry = LogEntry { _Index = 2, _Term = 1, _Command = NoOp }
+    let zerothEntry = mkLogEntry 0 0
+        firstEntry = mkLogEntry 1 1
+        secondEntry = mkLogEntry 2 1
         req = AppendEntriesReq 1 0 AppendEntries { _LeaderTerm = 1
                                                  , _LeaderId = 1
                                                  , _PrevLogIndex = 0
@@ -225,11 +223,11 @@ testRequestVote = do
         case sendMsg node (req 2 2 2) of
           Just ([msg], _) -> msg `shouldBe` RequestVoteRes 0 1 (2, True)
     context "and candidate's log is not as up-to-date as receiver's log" $ do
-      let zerothEntry = LogEntry { _Index = 0, _Term = 0, _Command = NoOp }
-          firstEntry = LogEntry { _Index = 1, _Term = 1, _Command = NoOp }
+      let zerothEntry = mkLogEntry 0 0
+          firstEntry = mkLogEntry 1 1
           log = [zerothEntry, firstEntry]
           node' = node { _serverTerm = 1, _entryLog = log }
-      it "does not grant vote" $ do
+      it "does not grant vote" $
         case sendMsg node' (req 1 0 0) of
           Just ([msg], _) -> msg `shouldBe` RequestVoteRes 0 1 (1, False)
   context "if votedFor = candidateId" $ do
@@ -243,10 +241,9 @@ testRequestVote = do
         case sendMsg node (req 2 2 2) of
           Just ([msg], _) -> msg `shouldBe` RequestVoteRes 0 1 (2, True)
     context "and candidate's log is not as up-to-date as receiver's log" $ do
-      let zerothEntry = LogEntry { _Index = 0, _Term = 0, _Command = NoOp }
-          firstEntry = LogEntry { _Index = 1, _Term = 1, _Command = NoOp }
-          log = [zerothEntry, firstEntry]
-          node' = node { _serverTerm = 1, _entryLog = log }
+      let zerothEntry = mkLogEntry 0 0
+          firstEntry = mkLogEntry 1 1
+          node' = node { _serverTerm = 1, _entryLog = [zerothEntry, firstEntry] }
       it "does not grant vote" $
         case sendMsg node' (req 1 0 0) of
           Just ([msg], _) -> msg `shouldBe` RequestVoteRes 0 1 (1, False)

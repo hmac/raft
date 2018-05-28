@@ -2,7 +2,7 @@ import           Control.Monad.Log
 import           Control.Monad.State.Strict
 import           Control.Monad.Writer.Strict
 import qualified Data.HashMap.Strict         as Map
-import           Data.List                   (sortOn)
+import           Data.List                   (partition, sortOn)
 import           Data.Maybe                  (fromJust)
 import qualified Data.Text.IO                as T (putStrLn)
 
@@ -34,9 +34,9 @@ main = do
 type Client = [(Integer, Message Command)]
 
 mkClient :: Client
-mkClient = [(500, ClientRequest 0 (Set 42))
-          , (1000, ClientRequest 0 (Set 43))
-          , (1500, ClientRequest 0 (Set 7))
+mkClient = [(500, ClientRequest 0 0 (Set 42))
+          , (1000, ClientRequest 0 1 (Set 43))
+          , (1500, ClientRequest 0 2 (Set 7))
           , (1521, Tick 1)
           , (1521, Tick 2)] -- wait for the followers to apply their logs
 
@@ -60,11 +60,12 @@ testLoop s client = go s 0 client
             res = runStateT (runStateT (runPureLoggingT run) state) machine
         case res of
           Just (((msgs, logs), state'), machine') -> do
+            let (_, rest) = partition isClientResponse msgs
             let servers' = Map.insert r (state', machine') servers
             print msg
             putStrLn $ show (_selfId state) ++ ": " ++ show machine'
             go servers' clock $
-              sortOn fst (queue' ++ map (\m -> (clock, m)) msgs)
+              sortOn fst (queue' ++ map (\m -> (clock, m)) rest)
           Nothing -> do
             putStrLn "" >> putStrLn ""
             print msg
@@ -76,6 +77,11 @@ testLoop s client = go s 0 client
         queue' = sortOn fst (queue ++ ticks)
         ticks = map ((,) clock . Tick) (Map.keys servers)
 
+isClientResponse :: Message a -> Bool
+isClientResponse m = case m of
+                       ClientResponse {} -> True
+                       _                 -> False
+
 recipient :: Message a -> ServerId
 recipient msg =
   case msg of
@@ -84,7 +90,7 @@ recipient msg =
     (AppendEntriesRes _ to _) -> to
     (RequestVoteReq _ to _)   -> to
     (RequestVoteRes _ to _)   -> to
-    (ClientRequest to _)      -> to
+    (ClientRequest to _ _)    -> to
 
 mkServer ::
      ServerId

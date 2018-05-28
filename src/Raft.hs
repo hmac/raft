@@ -52,28 +52,28 @@ type ServerT a m = WriterT [Message a] (ExtServerT a m)
 -- This function takes a Message and handles it, updating the node's state and
 -- generating any messages to send in response.
 -- This is the only function exported from this module
-handleMessage :: MonadPlus m => (a -> m ()) -> Message a -> ExtServerT a m [Message a]
+handleMessage ::
+     MonadPlus m => (a -> m ()) -> Message a -> ExtServerT a m [Message a]
 handleMessage apply m = snd <$> runWriterT go
-    where
-      go = checkForNewLeader m >> applyCommittedLogEntries apply >> handler
-      handler =
-        case m of
-          Tick _                     -> handleTick apply
-          AppendEntriesReq from to r -> handleAppendEntriesReq from to r
-          AppendEntriesRes from to r -> handleAppendEntriesRes from to r apply
-          RequestVoteReq from to r   -> handleRequestVoteReq from to r
-          RequestVoteRes from to r   -> handleRequestVoteRes from to r
-          ClientRequest _ reqId r          -> handleClientRequest reqId r
+  where
+    go = checkForNewLeader m >> applyCommittedLogEntries apply >> handler
+    handler =
+      case m of
+        Tick _                     -> handleTick apply
+        AppendEntriesReq from to r -> handleAppendEntriesReq from to r
+        AppendEntriesRes from to r -> handleAppendEntriesRes from to r apply
+        RequestVoteReq from to r   -> handleRequestVoteReq from to r
+        RequestVoteRes from to r   -> handleRequestVoteRes from to r
+        ClientRequest _ reqId r    -> handleClientRequest reqId r
 
 checkForNewLeader :: MonadPlus m => Message a -> ServerT a m ()
 checkForNewLeader m =
   case m of
-    Tick _                      -> pure ()
-    ClientRequest {}            -> pure ()
     AppendEntriesReq _ _ r      -> go (r^.leaderTerm)
     AppendEntriesRes _ _ (t, _) -> go t
     RequestVoteReq _ _ r        -> go (r^.candidateTerm)
     RequestVoteRes _ _ (t, _)   -> go t
+    _                           -> pure ()
   where
     go :: MonadPlus m => Term -> ServerT a m ()
     go t = do
@@ -182,21 +182,25 @@ handleAppendEntries r = do
   log <- use entryLog
   currentCommitIndex <- use commitIndex
   currentTerm <- use serverTerm
-  if r ^. leaderTerm < currentTerm
-     then do
-       logMessage ["AppendEntries denied: term < currentTerm"]
-       pure False
-     else case findEntry log (r ^. prevLogIndex) (r ^. prevLogTerm) of
-            Nothing -> do
-              logMessage ["AppendEntries denied: no entry found"]
-              pure False
-            Just _ -> do
-              entryLog %= (\l -> appendEntries l (r ^. entries))
-              when (r ^. leaderCommit > currentCommitIndex) $ do
-                log' <- use entryLog -- fetch the updated log
-                commitIndex .= min (r ^. leaderCommit) (last log' ^. index)
-              logMessage ["AppendEntries approved"]
-              pure True
+  case validateAppendEntries currentTerm log r of
+    (False, reason) -> logMessage [reason] >> pure False
+    (True, _) -> do
+      entryLog %= (\l -> appendEntries l (r^.entries))
+      when (r^.leaderCommit > currentCommitIndex) $ do
+        lastNewEntry <- last <$> use entryLog
+        commitIndex .= min (r^.leaderCommit) (lastNewEntry^.index)
+      logMessage ["AppendEntries approved"]
+      pure True
+
+-- TODO: this is a crap return type - improve it
+validateAppendEntries :: Term -> Log a -> AppendEntries a -> (Bool, T.Text)
+validateAppendEntries currentTerm log rpc =
+  if rpc^.leaderTerm < currentTerm
+     then (False, "AppendEntries denied: term < currentTerm")
+     else case matchingLogEntry of
+            Nothing -> (False, "AppendEntries denied: no entry found")
+            Just _  -> (True, "AppendEntries approved")
+  where matchingLogEntry = findEntry log (rpc^.prevLogIndex) (rpc^.prevLogTerm)
 
 -- if an existing entry conflicts with a new one (same index, different terms),
 --   delete the existing entry and all that follow it
