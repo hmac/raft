@@ -124,23 +124,20 @@ handleAppendEntriesRes from to (term, success) apply = do
 
 handleRequestVoteReq :: Monad m => ServerId -> ServerId -> RequestVote a -> ServerT a m ()
 handleRequestVoteReq from to r = do
-  currentTerm <- gets _serverTerm
   voteGranted <- handleRequestVote r
   updatedTerm <- use serverTerm
   tell [RequestVoteRes to from (updatedTerm, voteGranted)]
 
 handleRequestVoteRes :: Monad m => ServerId -> ServerId -> (Term, Bool) -> ServerT a m ()
-handleRequestVoteRes from to (term, voteGranted) = do
-  currentTerm <- use serverTerm
+handleRequestVoteRes _from _to (_term, voteGranted) = do
   isCandidate <- (== Candidate) <$> use role
-  when isCandidate $ do
-    when voteGranted $ do
-      votes <- (+1) <$> use votesReceived
-      total <- (+ 1) . length <$> use serverIds
-      votesReceived .= votes
-      when (votes % total > 1 % 2) $ do
-        logMessage [T.pack $ "obtained " ++ show (votes % total) ++ " majority"]
-        convertToLeader
+  when (isCandidate && voteGranted) $ do
+    votes <- (+1) <$> use votesReceived
+    total <- (+ 1) . length <$> use serverIds
+    votesReceived .= votes
+    when (votes % total > 1 % 2) $ do
+      logMessage [T.pack $ "obtained " ++ show (votes % total) ++ " majority"]
+      convertToLeader
 
 handleClientRequest :: Monad m => RequestId -> a -> ServerT a m ()
 handleClientRequest reqId c = do
