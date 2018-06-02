@@ -49,8 +49,8 @@ executables:
 
 tests:
   integration:
-    main:                Integration.hs
-    source-dirs:         test
+    main:                Main.hs
+    source-dirs:         test/integration
     ghc-options:
     - -threaded
     - -rtsopts
@@ -59,8 +59,8 @@ tests:
     - raft
     - hspec
   unit:
-    main: Unit.hs
-    source-dirs:         test
+    main:                Main.hs
+    source-dirs:         test/unit
     ghc-options:
     - -threaded
     - -rtsopts

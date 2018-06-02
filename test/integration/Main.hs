@@ -1,6 +1,7 @@
 import           Control.Monad.Log
 import           Control.Monad.State.Strict
 import           Control.Monad.Writer.Strict
+import           Data.Functor.Identity
 import qualified Data.HashMap.Strict         as Map
 import           Data.List                   (partition, sortOn)
 import           Data.Maybe                  (fromJust)
@@ -17,7 +18,7 @@ data Command =
 newtype StateMachine = StateMachine { value :: Int }
   deriving (Eq, Show)
 
-type StateMachineM = StateT StateMachine Maybe
+type StateMachineM = StateT StateMachine Identity
 
 apply :: Command -> StateMachineM ()
 apply NoOp    = pure ()
@@ -42,7 +43,7 @@ mkClient = [(500, ClientRequest 0 0 (Set 42))
 
 testLoop ::
      Map.HashMap ServerId (ServerState Command, StateMachine) -> Client -> IO ()
-testLoop s client = go s 0 client
+testLoop s = go s 0
   where
     go servers _ [] =
       let states = Map.toList $ Map.map snd servers
@@ -57,21 +58,15 @@ testLoop s client = go s 0 client
               if time <= clock
                 then handleMessage apply msg
                 else pure []
-            res = runStateT (runStateT (runPureLoggingT run) state) machine
+            res = runIdentity $ runStateT (runStateT (runPureLoggingT run) state) machine
         case res of
-          Just (((msgs, logs), state'), machine') -> do
+          (((msgs, _), state'), machine') -> do
             let (_, rest) = partition isClientResponse msgs
             let servers' = Map.insert r (state', machine') servers
             print msg
             putStrLn $ show (_selfId state) ++ ": " ++ show machine'
             go servers' clock $
               sortOn fst (queue' ++ map (\m -> (clock, m)) rest)
-          Nothing -> do
-            putStrLn "" >> putStrLn ""
-            print msg
-            print state
-            print res
-            error "received nothing!"
     go servers clock queue = go servers (clock + 1) queue'
       where
         queue' = sortOn fst (queue ++ ticks)

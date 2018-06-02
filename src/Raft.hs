@@ -53,7 +53,7 @@ type ServerT a m = WriterT [Message a] (ExtServerT a m)
 -- generating any messages to send in response.
 -- This is the only function exported from this module
 handleMessage ::
-     MonadPlus m => (a -> m ()) -> Message a -> ExtServerT a m [Message a]
+     Monad m => (a -> m ()) -> Message a -> ExtServerT a m [Message a]
 handleMessage apply m = snd <$> runWriterT go
   where
     go = checkForNewLeader m >> applyCommittedLogEntries apply >> handler
@@ -66,7 +66,7 @@ handleMessage apply m = snd <$> runWriterT go
         RequestVoteRes from to r   -> handleRequestVoteRes from to r
         ClientRequest _ reqId r    -> handleClientRequest reqId r
 
-checkForNewLeader :: MonadPlus m => Message a -> ServerT a m ()
+checkForNewLeader :: Monad m => Message a -> ServerT a m ()
 checkForNewLeader m =
   case m of
     AppendEntriesReq _ _ r      -> go (r^.leaderTerm)
@@ -75,12 +75,12 @@ checkForNewLeader m =
     RequestVoteRes _ _ (t, _)   -> go t
     _                           -> pure ()
   where
-    go :: MonadPlus m => Term -> ServerT a m ()
+    go :: Monad m => Term -> ServerT a m ()
     go t = do
       currentTerm <- use serverTerm
       when (t > currentTerm) (convertToFollower t)
 
-handleTick :: MonadPlus m => (a -> m ()) -> ServerT a m ()
+handleTick :: Monad m => (a -> m ()) -> ServerT a m ()
 handleTick apply = do
   -- if election timeout elapses without receiving AppendEntries RPC from current
   -- leader or granting vote to candidate, convert to candidate
@@ -93,7 +93,7 @@ handleTick apply = do
   when (electionTimer' >= electTimeout && role /= Leader) convertToCandidate
   when (heartbeatTimer' >= hbTimeout && role == Leader) sendHeartbeats
 
-handleAppendEntriesReq :: MonadPlus m => ServerId -> ServerId -> AppendEntries a -> ServerT a m ()
+handleAppendEntriesReq :: Monad m => ServerId -> ServerId -> AppendEntries a -> ServerT a m ()
 handleAppendEntriesReq from to r = do
   currentTerm <- use serverTerm
   success <- handleAppendEntries r
@@ -101,48 +101,48 @@ handleAppendEntriesReq from to r = do
   updatedTerm <- use serverTerm
   tell [AppendEntriesRes to from (updatedTerm, success)]
 
-handleAppendEntriesRes :: MonadPlus m => ServerId -> ServerId -> (Term, Bool) -> (a -> m ()) -> ServerT a m ()
+handleAppendEntriesRes :: Monad m => ServerId -> ServerId -> (Term, Bool) -> (a -> m ()) -> ServerT a m ()
 handleAppendEntriesRes from to (term, success) apply = do
   isLeader <- (== Leader) <$> use role
-  guard isLeader
-  -- N.B. need to "update nextIndex and matchIndex for follower"
-  -- but not sure what to update it to.
-  -- For now:
-  -- update matchIndex[followerId] = nextIndex[followerId]
-  -- increment nextIndex[followerId]
-  next <- use $ nextIndex . at from
-  match <- use $ matchIndex . at from
-  case (next, match) of
-    (Just n, Just m) -> do
-      let (next', match') = if success then (n + 1, n) else (n - 1, m)
-      nextIndex . at from ?= next'
-      matchIndex . at from ?= match'
-      checkCommitIndex
-      applyCommittedLogEntries apply
-      unless success (sendAppendEntries from next')
-    _ -> error "expected nextIndex and matchIndex to have element!"
+  when isLeader $ do
+    -- N.B. need to "update nextIndex and matchIndex for follower"
+    -- but not sure what to update it to.
+    -- For now:
+    -- update matchIndex[followerId] = nextIndex[followerId]
+    -- increment nextIndex[followerId]
+    next <- use $ nextIndex . at from
+    match <- use $ matchIndex . at from
+    case (next, match) of
+      (Just n, Just m) -> do
+        let (next', match') = if success then (n + 1, n) else (n - 1, m)
+        nextIndex . at from ?= next'
+        matchIndex . at from ?= match'
+        checkCommitIndex
+        applyCommittedLogEntries apply
+        unless success (sendAppendEntries from next')
+      _ -> error "expected nextIndex and matchIndex to have element!"
 
-handleRequestVoteReq :: MonadPlus m => ServerId -> ServerId -> RequestVote a -> ServerT a m ()
+handleRequestVoteReq :: Monad m => ServerId -> ServerId -> RequestVote a -> ServerT a m ()
 handleRequestVoteReq from to r = do
   currentTerm <- gets _serverTerm
   voteGranted <- handleRequestVote r
   updatedTerm <- use serverTerm
   tell [RequestVoteRes to from (updatedTerm, voteGranted)]
 
-handleRequestVoteRes :: MonadPlus m => ServerId -> ServerId -> (Term, Bool) -> ServerT a m ()
+handleRequestVoteRes :: Monad m => ServerId -> ServerId -> (Term, Bool) -> ServerT a m ()
 handleRequestVoteRes from to (term, voteGranted) = do
   currentTerm <- use serverTerm
   isCandidate <- (== Candidate) <$> use role
-  guard isCandidate
-  when voteGranted $ do
-    votes <- (+1) <$> use votesReceived
-    total <- (+ 1) . length <$> use serverIds
-    votesReceived .= votes
-    when (votes % total > 1 % 2) $ do
-      logMessage [T.pack $ "obtained " ++ show (votes % total) ++ " majority"]
-      convertToLeader
+  when isCandidate $ do
+    when voteGranted $ do
+      votes <- (+1) <$> use votesReceived
+      total <- (+ 1) . length <$> use serverIds
+      votesReceived .= votes
+      when (votes % total > 1 % 2) $ do
+        logMessage [T.pack $ "obtained " ++ show (votes % total) ++ " majority"]
+        convertToLeader
 
-handleClientRequest :: MonadPlus m => RequestId -> a -> ServerT a m ()
+handleClientRequest :: Monad m => RequestId -> a -> ServerT a m ()
 handleClientRequest reqId c = do
   -- TODO: followers should redirect request to leader
   -- TODO: we should actually respond to the request
