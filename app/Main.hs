@@ -42,7 +42,6 @@ main = do
     register "0" s0
     register "1" s1
     register "2" s2
-    register "client" client
 
     expect
   pure ()
