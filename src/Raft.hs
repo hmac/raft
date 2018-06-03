@@ -36,7 +36,7 @@ data Message a =
   | RequestVoteRes ServerId ServerId (Term, Bool)
   | Tick ServerId
   | ClientRequest ServerId RequestId a
-  | ClientResponse ServerId RequestId a Bool
+  | ClientResponse ServerId RequestId (Either T.Text a)
   deriving (Generic)
 
 deriving instance Typeable a => Typeable (Message a)
@@ -165,7 +165,7 @@ handleClientRequest reqId c = do
       tell [ClientRequest leader reqId c]
     (_, Nothing) -> do
       logMessage ["received client request but unable to identify leader: failing request"]
-      tell [ClientResponse self reqId c False]
+      tell [ClientResponse self reqId (Left "invalid request: node is not leader")]
       pure ()
 
 -- reply false if term < currentTerm
@@ -369,4 +369,4 @@ applyCommittedLogEntries apply = do
     let entry = fromJust $ findByIndex log lastApplied'
     logMessage [T.pack $ "applying entry " ++ show (entry^.index)]
     (lift . lift . lift) $ apply (_Command entry)
-    tell [ClientResponse self (entry^.requestId) (entry^.command) True]
+    tell [ClientResponse self (entry^.requestId) (Right (entry^.command))]

@@ -97,12 +97,11 @@ server self others eTimeout hTimeout = spawnLocal $ do
           isClientResponse _                 = False
       mapM_ (say . T.unpack) logs
       mapM_ (\msg -> nsend ((show . unServerId . messageRecipient) msg) msg) rest
-      forM_ clientResponses $ \res@(ClientResponse _ reqId _ _) ->
+      forM_ clientResponses $ \res@(ClientResponse _ reqId _) ->
         case Map.lookup reqId reqs of
           Just pid -> do say ("sending " ++ show res ++ " to client"); send pid res
           Nothing  -> pure ()
-      mapM_ (nsend "client") clientResponses
-      let reqs' = foldl' (\reqMap (ClientResponse _ reqId _ _) -> Map.delete reqId reqMap) reqs clientResponses
+      let reqs' = foldl' (\reqMap (ClientResponse _ reqId _) -> Map.delete reqId reqMap) reqs clientResponses
       pure (s', m', reqs')
     handleClockTick s m reqs _ = handleRpc s m reqs (Tick 0)
     handleClientReq s m reqs r = do
@@ -134,10 +133,8 @@ spawnClient = spawnLocal $ say "I am client" >> liftIO (threadDelay 5) >> go 1
       handleResponse msg
       go (n + 1)
     handleResponse :: Raft.Message Command -> Process ()
-    handleResponse (ClientResponse _ _ cmd success) =
-      if success
-        then say $ "command succeeded: " ++ show cmd
-        else say $ "command failed: " ++ show cmd
+    handleResponse (ClientResponse _ _ (Left err)) = say $ "command failed: " ++ show err
+    handleResponse (ClientResponse _ _ (Right cmd)) = say $ "command succeeded: " ++ show cmd
     handleResponse _ = die ("client received bad response (not client res)" :: String)
 
 processMessage ::
