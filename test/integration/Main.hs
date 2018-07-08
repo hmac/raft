@@ -14,6 +14,7 @@ data Command =
     NoOp
   | Set Int
   deriving (Eq, Show)
+type Response = ()
 
 newtype StateMachine = StateMachine { value :: Int }
   deriving (Eq, Show)
@@ -32,7 +33,7 @@ main = do
       servers = Map.insert 2 s2 $ Map.insert 1 s1 $ Map.insert 0 s0 Map.empty
   testLoop servers mkClient
 
-type Client = [(Integer, Message Command)]
+type Client = [(Integer, Message Command Response)]
 
 mkClient :: Client
 mkClient = [(500, ClientRequest 0 0 (Set 42))
@@ -72,12 +73,12 @@ testLoop s = go s 0
         queue' = sortOn fst (queue ++ ticks)
         ticks = map ((,) clock . Tick) (Map.keys servers)
 
-isClientResponse :: Message a -> Bool
+isClientResponse :: Message a b -> Bool
 isClientResponse m = case m of
                        ClientResponse {} -> True
                        _                 -> False
 
-recipient :: Message a -> ServerId
+recipient :: Message a b -> ServerId
 recipient msg =
   case msg of
     Tick to                   -> to

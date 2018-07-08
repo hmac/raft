@@ -13,6 +13,7 @@ data Command =
     NoOp
   | Set Int
   deriving (Eq, Show)
+type Response = ()
 
 newtype StateMachine = StateMachine { value :: Int }
   deriving (Eq, Show)
@@ -22,7 +23,7 @@ type StateMachineM = StateT StateMachine Identity
 apply :: Command -> Identity ()
 apply _ = return ()
 
-sendMsg :: ServerState Command -> Message Command -> ([Message Command], ServerState Command)
+sendMsg :: ServerState Command -> Message Command Response -> ([Message Command Response], ServerState Command)
 sendMsg node msgIn = (msgs, state)
   where ((msgs, logs), state) = runIdentity $ runStateT (runPureLoggingT (handleMessage apply msgIn)) node
 

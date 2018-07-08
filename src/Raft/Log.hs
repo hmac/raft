@@ -25,7 +25,7 @@ type LogIndex = Integer
 -- The ID of a client request
 newtype RequestId = RequestId
   { unRequestId :: Integer
-  } deriving (Eq, Num, Show, Typeable, Binary, Hashable)
+  } deriving (Eq, Ord, Num, Show, Generic, Typeable, Binary, Hashable)
 
 data LogEntry a = LogEntry
   { _Index     :: LogIndex

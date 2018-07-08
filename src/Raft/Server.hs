@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveGeneric              #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE StandaloneDeriving         #-}
 {-# LANGUAGE TemplateHaskell            #-}
@@ -10,13 +11,14 @@ import           Data.Foldable       (foldl')
 import           Data.Hashable       (Hashable)
 import qualified Data.HashMap.Strict as Map
 import           Data.Typeable       (Typeable)
+import           GHC.Generics
 
 import           Raft.Log
 
 -- Server IDs start at 0 and increase monotonically
 newtype ServerId = ServerId
   { unServerId :: Int
-  } deriving (Eq, Num, Show, Hashable, Typeable, Binary)
+  } deriving (Eq, Ord, Num, Show, Generic, Hashable, Typeable, Binary)
 
 newtype MonotonicCounter = MonotonicCounter
   { unMonotonicCounter :: Integer
