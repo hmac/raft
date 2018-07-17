@@ -30,6 +30,7 @@ dependencies:
 - safe
 - logging-effect
 - text
+- random
 
 library:
   source-dirs: src
@@ -45,7 +46,26 @@ executables:
     dependencies:
     - raft
     - distributed-process
+    - network
+    - network-transport
     - network-transport-tcp
+    - bytestring
+  raft-http:
+    main:               Main.hs
+    source-dirs:        app/http
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - raft
+    - bytestring
+    - servant-server
+    - servant-client
+    - aeson
+    - warp
+    - http-client
+    - time
 
 tests:
   integration:

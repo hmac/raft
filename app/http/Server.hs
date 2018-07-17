@@ -12,17 +12,15 @@ import           Data.Time.Format           (defaultTimeLocale, formatTime,
                                              iso8601DateFormat)
 import           Raft
 import           Raft.Log                   (RequestId)
-import           Raft.Server                (ServerState (..))
+import           Raft.Server                (ServerState (..), readTimeout,
+                                             unMonotonicCounter)
 
 data Config a b machine = Config { state :: MVar (ServerState a, machine)
                                  , queue :: Chan (Message a b)
                                  , apply :: a -> StateT machine IO b
                                  , requests :: MVar (Map RequestId (MVar (Message a b)))
                                  }
--- server receives three types of message:
--- - clock ticks from its clock (via a channel)
--- - RPCs from other servers (via a mailbox message)
--- - requests from a client (via the same mechanism)
+
 runServer :: (Show a, Show machine) => Config a b machine -> IO ThreadId
 runServer config = forkIO $ do
   _ <- forkIO $ forever (logState config)
@@ -34,7 +32,7 @@ logState :: (Show a, Show machine) => Config a b machine -> IO ()
 logState Config { state } = do
   threadDelay 2000000
   (ServerState { _role, _serverTerm, _electionTimer, _electionTimeout }, m) <- readMVar state
-  print (_role, _serverTerm, _electionTimer, _electionTimeout, m)
+  print (_role, _serverTerm, unMonotonicCounter _electionTimer, (unMonotonicCounter . readTimeout) _electionTimeout, m)
 
 -- Apply a Raft message to the state
 -- Prints out any logs generated
@@ -46,8 +44,8 @@ processMessage Config { state, queue, apply } msg = do
   case result of
     (((msgs, logs), s'), m') -> do
       mapM_ printLog logs
-      writeList2Chan queue msgs
       putMVar state (s', m')
+      writeList2Chan queue msgs
 
 printLog :: T.Text -> IO ()
 printLog msg = do

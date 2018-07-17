@@ -194,6 +194,9 @@ testAppendEntries = do
           msgs `shouldBe` [AppendEntriesRes 0 1 (1, True)]
           node'^.commitIndex `shouldBe` 0
 
+-- TODO: test case where there are 3 nodes, but log is only committed on leader
+-- + 1 node. Leader should NOT apply log to statemachine
+
 testRequestVote :: Spec
 testRequestVote = do
   let mkNode = mkServerState 0 [1] 10 10 NoOp

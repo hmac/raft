@@ -1,7 +1,6 @@
-{-# LANGUAGE DeriveGeneric              #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE OverloadedStrings          #-}
-{-# LANGUAGE StandaloneDeriving         #-}
+{-# LANGUAGE DeriveGeneric      #-}
+{-# LANGUAGE OverloadedStrings  #-}
+{-# LANGUAGE StandaloneDeriving #-}
 
 module Raft (handleMessage, Message(..), ServerT) where
 
@@ -55,7 +54,7 @@ handleMessage ::
      Monad m => (a -> m b) -> Message a b -> ExtServerT a m [Message a b]
 handleMessage apply m = snd <$> runWriterT go
   where
-    go = checkForNewLeader m >> applyCommittedLogEntries apply >> handler
+    go = applyCommittedLogEntries apply >> handler
     handler =
       case m of
         Tick _                     -> handleTick apply
@@ -65,20 +64,6 @@ handleMessage apply m = snd <$> runWriterT go
         RequestVoteRes from to r   -> handleRequestVoteRes from to r
         ClientRequest _ reqId r    -> handleClientRequest reqId r
 
-checkForNewLeader :: Monad m => Message a b -> ServerT a b m ()
-checkForNewLeader m =
-  case m of
-    AppendEntriesReq _ _ r      -> go (r^.leaderTerm)
-    AppendEntriesRes _ _ (t, _) -> go t
-    RequestVoteReq _ _ r        -> go (r^.candidateTerm)
-    RequestVoteRes _ _ (t, _)   -> go t
-    _                           -> pure ()
-  where
-    go :: Monad m => Term -> ServerT a b m ()
-    go t = do
-      currentTerm <- use serverTerm
-      when (t > currentTerm) (convertToFollower t)
-
 handleTick :: Monad m => (a -> m b) -> ServerT a b m ()
 handleTick apply = do
   -- if election timeout elapses without receiving AppendEntries RPC from current
@@ -87,18 +72,25 @@ handleTick apply = do
   electionTimer' <- electionTimer <+= 1
   heartbeatTimer' <- heartbeatTimer <+= 1
   role <- use role
-  electTimeout <- use electionTimeout
+  electTimeout <- readTimeout <$> use electionTimeout
   hbTimeout <- use heartbeatTimeout
   when (electionTimer' >= electTimeout && role /= Leader) convertToCandidate
   when (heartbeatTimer' >= hbTimeout && role == Leader) sendHeartbeats
 
 handleAppendEntriesReq :: Monad m => ServerId -> ServerId -> AppendEntries a -> ServerT a b m ()
 handleAppendEntriesReq from to r = do
-  currentTerm <- use serverTerm
+  checkForNewLeader r
   success <- handleAppendEntries r
   electionTimer .= 0
   updatedTerm <- use serverTerm
   tell [AppendEntriesRes to from (updatedTerm, success)]
+
+checkForNewLeader :: Monad m => AppendEntries a -> ServerT a b m ()
+checkForNewLeader r = do
+  let rpcTerm = r^.leaderTerm
+  currentTerm <- use serverTerm
+  isCandidate <- (== Candidate) <$> use role
+  when (isCandidate && rpcTerm >= currentTerm) (convertToFollower rpcTerm)
 
 handleAppendEntriesRes :: Monad m => ServerId -> ServerId -> (Term, Bool) -> (a -> m b) -> ServerT a b m ()
 handleAppendEntriesRes from to (term, success) apply = do
@@ -123,17 +115,22 @@ handleAppendEntriesRes from to (term, success) apply = do
 
 handleRequestVoteReq :: Monad m => ServerId -> ServerId -> RequestVote a -> ServerT a b m ()
 handleRequestVoteReq from to r = do
+  logMessage [T.pack $ "Received RequestVoteReq from " ++ show from]
   voteGranted <- handleRequestVote r
   updatedTerm <- use serverTerm
+  logMessage [T.pack $ "Sending RequestVoteRes from " ++ show from ++ " to " ++ show to]
   tell [RequestVoteRes to from (updatedTerm, voteGranted)]
 
 handleRequestVoteRes :: Monad m => ServerId -> ServerId -> (Term, Bool) -> ServerT a b m ()
-handleRequestVoteRes _from _to (_term, voteGranted) = do
+handleRequestVoteRes from to (_term, voteGranted) = do
   isCandidate <- (== Candidate) <$> use role
+  unless isCandidate $ logMessage [T.pack $ "Ignoring RequestVoteRes from " ++ show from ++ ": not candidate"]
+  logMessage [T.pack $ "Received RequestVoteRes from " ++ show from ++ ", to " ++ show to ++ ", vote granted: " ++ show voteGranted]
   when (isCandidate && voteGranted) $ do
     votes <- (+1) <$> use votesReceived
     total <- (+ 1) . length <$> use serverIds
     votesReceived .= votes
+    logMessage [T.pack $ "received " ++ show votes ++ " votes"]
     when (votes % total > 1 % 2) $ do
       logMessage [T.pack $ "obtained " ++ show (votes % total) ++ " majority"]
       convertToLeader
@@ -185,7 +182,7 @@ handleAppendEntries r = do
       when (r^.leaderCommit > currentCommitIndex) $ do
         lastNewEntry <- last <$> use entryLog
         commitIndex .= min (r^.leaderCommit) (lastNewEntry^.index)
-      logMessage ["AppendEntries approved"]
+      -- logMessage ["AppendEntries approved"]
       pure True
 
 -- TODO: this is a crap return type - improve it
@@ -227,9 +224,10 @@ handleRequestVote r = do
      else case (isNothing (s^.votedFor) || matchingVote, logUpToDate) of
             (True, True) -> do
               votedFor .= Just (r ^. candidateId)
+              logMessage ["RequestVote granted"]
               pure True
             (False, _) -> do
-              logMessage ["RequestVote denied: vote already granted to another candidate"]
+              logMessage [T.pack $ "RequestVote denied: vote already granted to " ++ show (s^.votedFor)]
               pure False
             (_, False) -> do
               logMessage ["RequestVote denied: candidate's log is not up to date"]
@@ -269,10 +267,12 @@ convertToFollower leaderTerm = do
   role .= Follower
   serverTerm .= leaderTerm
   votesReceived .= 0
+  votedFor .= Nothing
 
 -- increment currentTerm
 -- vote for self
 -- reset election timer
+-- randomise election timeout
 -- send RequestVote RPCs to all other servers
 convertToCandidate :: Monad m => ServerT a b m ()
 convertToCandidate = do
@@ -284,11 +284,14 @@ convertToCandidate = do
   role .= Candidate
   serverTerm .= newTerm
   votedFor .= Just ownId
+  votesReceived .= 1
   electionTimer .= 0
+  electionTimeout %= nextTimeout
   let rpc = RequestVote { _CandidateTerm = newTerm
                         , _CandidateId = ownId
                         , _LastLogIndex = lastLogEntry ^. index
                         , _LastLogTerm = lastLogEntry ^. term }
+  mapM_ (\i -> logMessage [T.pack $ "Sending RequestVoteReq from self (" ++ show ownId ++ ") to " ++ show i]) servers
   tell $ map (\i -> RequestVoteReq ownId i rpc) servers
 
 -- send initial empty AppendEntries RPCs (hearbeats) to each server
@@ -300,7 +303,7 @@ convertToLeader = do
 
 sendHeartbeats :: Monad m => ServerT a b m ()
 sendHeartbeats = do
-  logMessage ["sending heartbeats"]
+  -- logMessage ["sending heartbeats"]
   servers <- use serverIds
   currentTerm <- use serverTerm
   selfId <- use selfId
@@ -337,15 +340,19 @@ sendAppendEntries followerId logIndex = do
 -- if there exists an N such that N > commitIndex, a majority of matchIndex[i]
 --   >= N, and log[N].term == currentTerm: set commitIndex = N
 -- For simplicity, we only check the case of N = commitIndex + 1
--- Changing this would probably bring a perf improvement
+-- Changing this might bring a perf improvement
 checkCommitIndex :: Monad m => ServerT a b m ()
 checkCommitIndex = do
   n <- (+1) <$> use commitIndex
   matchIndex <- use matchIndex
   currentTerm <- use serverTerm
   log <- use entryLog
-  let upToDate = Map.size $ Map.filter (>= n) matchIndex
-      majorityUpToDate = upToDate % Map.size matchIndex > 1 % 2
+  -- matchIndex currently doesn't include the current server, so we also check
+  -- if we are up to date, and include that accordingly
+  let selfUpToDate = if length log >= fromInteger n then 1 else 0
+      upToDate = selfUpToDate + Map.size (Map.filter (>= n) matchIndex)
+      total = Map.size matchIndex + 1
+      majorityUpToDate = (upToDate % total) > (1 % 2)
       entryAtN = atMay log (fromInteger n)
   case entryAtN of
     Nothing -> pure ()

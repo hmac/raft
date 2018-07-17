@@ -1,8 +1,9 @@
-{-# LANGUAGE DataKinds      #-}
-{-# LANGUAGE DeriveAnyClass #-}
-{-# LANGUAGE DeriveGeneric  #-}
-{-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE TypeOperators  #-}
+{-# LANGUAGE DataKinds         #-}
+{-# LANGUAGE DeriveAnyClass    #-}
+{-# LANGUAGE DeriveGeneric     #-}
+{-# LANGUAGE NamedFieldPuns    #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeOperators     #-}
 
 module Main where
 
@@ -11,53 +12,26 @@ import           Control.Monad.State.Strict
 import           Data.Aeson
 import qualified Data.Map.Strict            as Map
 import           Data.Maybe                 (fromJust)
+import qualified Data.Text                  as T (pack)
 import           GHC.Generics
 import           Network.HTTP.Client        (Manager, defaultManagerSettings,
                                              newManager)
 import           Network.Wai.Handler.Warp   (run)
 import qualified Raft                       (Message (..))
-import           Raft.Log                   (LogEntry, RequestId, Term)
+import           Raft.Log                   (LogEntry, RequestId, Term,
+                                             unRequestId)
 import           Raft.Rpc                   (AppendEntries, RequestVote)
 import           Raft.Server                (MonotonicCounter (..), ServerId,
                                              ServerId (..), ServerState,
                                              mkServerState)
 import           Servant
 import           Servant.Client
-import qualified Server                     as S (Config (..), processMessage,
-                                                  runServer)
+import qualified Server                     as S (Config (..), printLog,
+                                                  processMessage, runServer)
 import           System.Environment         (getArgs)
+import           System.Random
 
--- API:
--- POST /AppendEntries
---   {
---     term: Term,
---     leaderId: ServerId,
---     prevLogIndex: LogIndex,
---     prevLogTerm: Term,
---     entries: [LogEntry],
---     leaderCommit: LogIndex
---   }
---
---   200 OK
---   {
---     term: Term,
---     success: Bool,
---   }
--- POST /RequestVote
---   {
---     term: Term,
---     candidateId: ServerId,
---     lastLogIndex: LogIndex,
---     lastLogTerm: Term,
---   }
---
---   200 OK
---   {
---     term: Term,
---     voteGranted: Bool,
---   }
-
--- Our state machine
+-- State machine
 newtype StateMachine = StateMachine { value :: Int } deriving (Eq, Show)
 type StateMachineT m = StateT StateMachine m
 
@@ -172,52 +146,32 @@ type RaftAPI = "AppendEntriesRequest" :> ReqBody '[JSON] AppendEntriesReq :> Pos
 -- A server for our API
 server :: Config -> Server RaftAPI
 server config =
-  serveAppendEntriesReq config :<|>
-  serveAppendEntriesRes config :<|>
-    serveRequestVoteReq config :<|>
-    serveRequestVoteRes config :<|>
-     serveClientRequest config
+  serveGeneric config :<|>
+  serveGeneric config :<|>
+  serveGeneric config :<|>
+  serveGeneric config :<|>
+  serveClientRequest config
 
-serveAppendEntriesReq :: Config -> AppendEntriesReq -> Handler ()
-serveAppendEntriesReq config req = do
-  liftIO $ putStrLn "received AppendEntriesReq"
-  liftIO $ S.processMessage config (toRaftMessage req)
-
-serveAppendEntriesRes :: Config -> AppendEntriesRes -> Handler ()
-serveAppendEntriesRes config req = do
-  liftIO $ putStrLn "received AppendEntriesRes"
-  liftIO $ S.processMessage config (toRaftMessage req)
-
-serveRequestVoteReq :: Config -> RequestVoteReq -> Handler ()
-serveRequestVoteReq config req = do
-  liftIO $ putStrLn "received RequestVoteReq"
-  liftIO $ S.processMessage config (toRaftMessage req)
-
-serveRequestVoteRes :: Config -> RequestVoteRes -> Handler ()
-serveRequestVoteRes config req = liftIO $ do
-  putStrLn "received RequestVoteRes"
-  S.processMessage config (toRaftMessage req)
+serveGeneric :: RaftMessage a => Config -> a -> Handler ()
+serveGeneric config req = liftIO $ S.processMessage config (toRaftMessage req)
 
 serveClientRequest :: Config -> ClientReq -> Handler ClientRes
 serveClientRequest config req = liftIO $ do
   let reqId = cReqId req
-  putStrLn "received ClientRequest"
+      reqMapVar = S.requests config
   -- insert this request into the request map
-  modifyMVar_ (S.requests config) $ \reqMap -> do
-    var <- newEmptyMVar
-    pure $ Map.insert reqId var reqMap
+  var <- newEmptyMVar
+  modifyMVar_ reqMapVar (pure . Map.insert reqId var)
+  S.printLog "Processing client request"
   S.processMessage config (toRaftMessage req)
-  respVar <- Map.lookup reqId <$> readMVar (S.requests config)
-  case respVar of
-    Nothing -> error $ "could not find request " ++ show reqId
-    Just v -> do
-      resp <- readMVar v -- we'll block here until the response is ready
-      -- now we have the response, clear it from the request map
-      modifyMVar_ (S.requests config) (pure . Map.delete reqId)
-      case fromRaftMessage resp of
-        Nothing -> error "could not decode client response"
-        Just r  -> pure r
-
+  S.printLog "Waiting for response to request"
+  resp <- readMVar var -- we'll block here until the response is ready
+  -- now we have the response, clear it from the request map
+  S.printLog "Response found"
+  modifyMVar_ reqMapVar (pure . Map.delete reqId)
+  case fromRaftMessage resp of
+    Nothing -> error "could not decode client response"
+    Just r  -> pure r
 
 raftAPI :: Proxy RaftAPI
 raftAPI = Proxy
@@ -237,15 +191,15 @@ sendClientRequest :: ClientReq -> ClientM ClientRes
 -- The container for our server's persistent state
 type Config = S.Config Command CommandResponse StateMachine
 
+-- TODO: load the log from persistent storage and pass to mkServer
 main :: IO ()
 main = do
-  [selfId, electTimeout, hbTimeout] <- getArgs
+  [selfId] <- getArgs
   let self = ServerId (read selfId)
-      eTimeout = MonotonicCounter (read electTimeout)
-      hTimeout = MonotonicCounter (read hbTimeout)
       url = fromJust $ Map.lookup self serverAddrs
       others = filter (/= self) (Map.keys serverAddrs)
-  serverState <- newMVar $ mkServer self others eTimeout hTimeout
+  seed <- getStdRandom random
+  serverState <- newMVar $ mkServer self others (150, 300, seed) 20 -- Raft recommends a 150-300ms range for election timeouts
   queue <- newChan
   reqMap <- newMVar Map.empty
   let config = S.Config { S.state = serverState, S.queue = queue, S.apply = apply, S.requests = reqMap }
@@ -261,6 +215,7 @@ deliverMessages config manager = forever $ do
       env = ClientEnv manager url
   sendRpc m env config
 
+-- TODO: if RPC cannot be delivered, enqueue it for retry
 sendRpc :: Message -> ClientEnv -> Config -> IO ()
 sendRpc rpc env config =
   case rpc of
@@ -268,33 +223,36 @@ sendRpc rpc env config =
       let rpc = (sendRequestVoteReq . fromJust . fromRaftMessage) r
       res <- runClientM rpc env
       case res of
-        Left err -> putStrLn $ "Error sending RPC: " ++ show err
+        Left err -> putStrLn "Error sending RequestVoteReq RPC"
         Right _  -> pure ()
     r@Raft.AppendEntriesReq{} -> do
       let rpc = (sendAppendEntriesReq . fromJust . fromRaftMessage) r
       res <- runClientM rpc env
       case res of
-        Left err -> putStrLn $ "Error sending RPC: " ++ show err
+        Left err -> putStrLn "Error sending AppendEntriesReq RPC"
         Right () -> pure ()
     r@Raft.RequestVoteRes{} -> do
       let rpc = (sendRequestVoteRes . fromJust . fromRaftMessage) r
       res <- runClientM rpc env
       case res of
-        Left err -> putStrLn $ "Error sending RPC: " ++ show err
+        Left err -> putStrLn "Error sending RequestVoteRes RPC"
         Right _  -> pure ()
     r@Raft.AppendEntriesRes{} -> do
       let rpc = (sendAppendEntriesRes . fromJust . fromRaftMessage) r
       res <- runClientM rpc env
       case res of
-        Left err -> putStrLn $ "Error sending RPC: " ++ show err
+        Left err -> putStrLn "Error sending AppendEntriesRes RPC"
         Right () -> pure ()
     r@(Raft.ClientResponse _ reqId _) -> do
       -- if we get a client response, we need to find the request that it
       -- originated from and place it in the corresponding MVar in
       -- config.requests
+      S.printLog "Processing client response"
       reqs <- readMVar (S.requests config)
       case Map.lookup reqId reqs of
-        Nothing     -> error $ "cannot find request " ++ show reqId
+        Nothing     -> do
+          -- assume that the request was made to a different node
+          S.printLog $ T.pack $ "Ignoring client request [" ++ show (unRequestId reqId) ++ "] - not present in map"
         Just resVar -> putMVar resVar r
     r -> error $ "Unexpected rpc: " ++ show r
 
@@ -306,7 +264,7 @@ serverAddrs = Map.fromList [(1, BaseUrl Http "localhost" 10501 "")
 mkServer ::
      ServerId
   -> [ServerId]
-  -> MonotonicCounter
+  -> (Int, Int, Int)
   -> MonotonicCounter
   -> (ServerState Command, StateMachine)
 mkServer self others electionTimeout heartbeatTimeout =

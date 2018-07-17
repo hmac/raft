@@ -12,6 +12,7 @@ import           Data.Hashable       (Hashable)
 import qualified Data.HashMap.Strict as Map
 import           Data.Typeable       (Typeable)
 import           GHC.Generics
+import           System.Random
 
 import           Raft.Log
 
@@ -48,7 +49,7 @@ data ServerState a = ServerState
   -- monotonically)
   , _electionTimer    :: MonotonicCounter
   -- value of _electionTimer at which server becomes candidate
-  , _electionTimeout  :: MonotonicCounter
+  , _electionTimeout  :: Timeout
   -- an arbitrary counter used for hearbeats (initialised to 0, increases
   -- monotonically)
   , _heartbeatTimer   :: MonotonicCounter
@@ -69,10 +70,23 @@ data ServerState a = ServerState
 
 deriving instance (Show a) => Show (ServerState a)
 
+data Timeout = Timeout { low :: Int, high :: Int, gen :: StdGen } deriving (Show)
+
+nextTimeout :: Timeout -> Timeout
+nextTimeout t = let (_, gen') = randomR (low t, high t) (gen t)
+                 in t { gen = gen' }
+
+mkTimeout :: Int -> Int -> Int -> Timeout
+mkTimeout l h seed = Timeout { low = l, high = h, gen = mkStdGen seed }
+
+readTimeout :: Timeout -> MonotonicCounter
+readTimeout t = MonotonicCounter (toInteger r)
+  where r = fst $ randomR (low t, high t) (gen t)
+
 makeLenses ''ServerState
 
-mkServerState :: ServerId -> [ServerId] -> MonotonicCounter -> MonotonicCounter -> a -> ServerState a
-mkServerState self others electionTimeout heartbeatTimeout firstCommand = s
+mkServerState :: ServerId -> [ServerId] -> (Int, Int, Int) -> MonotonicCounter -> a -> ServerState a
+mkServerState self others (electLow, electHigh, electSeed) hbTimeout firstCommand = s
   where s = ServerState { _selfId = self
                         , _serverIds = others
                         , _serverTerm = 0
@@ -81,9 +95,9 @@ mkServerState self others electionTimeout heartbeatTimeout firstCommand = s
                         , _commitIndex = 0
                         , _lastApplied = 0
                         , _electionTimer = 0
-                        , _electionTimeout = electionTimeout
+                        , _electionTimeout = mkTimeout electLow electHigh electSeed
                         , _heartbeatTimer = 0
-                        , _heartbeatTimeout = heartbeatTimeout
+                        , _heartbeatTimeout = hbTimeout
                         , _role = Follower
                         , _nextIndex = initialMap
                         , _matchIndex = initialMap
