@@ -28,9 +28,9 @@ dependencies:
 - lens
 - binary
 - safe
-- logging-effect
 - text
 - random
+- monad-logger
 
 library:
   source-dirs: src

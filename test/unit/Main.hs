@@ -1,5 +1,5 @@
 import           Control.Lens
-import           Control.Monad.Log
+import           Control.Monad.Logger
 import           Control.Monad.State.Strict
 
 import           Raft
@@ -18,14 +18,15 @@ type Response = ()
 newtype StateMachine = StateMachine { value :: Int }
   deriving (Eq, Show)
 
-type StateMachineM = StateT StateMachine Identity
+type StateMachineM = StateT StateMachine (NoLoggingT Identity)
 
-apply :: Command -> Identity ()
+apply :: Command -> (NoLoggingT Identity) ()
 apply _ = return ()
 
 sendMsg :: ServerState Command -> Message Command Response -> ([Message Command Response], ServerState Command)
 sendMsg node msgIn = (msgs, state)
-  where ((msgs, logs), state) = runIdentity $ runStateT (runPureLoggingT (handleMessage apply msgIn)) node
+  where (msgs, state) = runIdentity $ runNoLoggingT $ runStateT (handleMessage apply msgIn) node
+        emptyStateMachine = StateMachine { value = 0 }
 
 main :: IO ()
 main = hspec $ do
@@ -42,12 +43,12 @@ testElectionTimeout = do
   let mkNode timeout = mkServerState 0 [1] timeout 10 NoOp
   context "when a node has not reached its election timeout" $
     it "doesn't call an election" $ do
-      let timeout = 2
+      let timeout = (2, 2, 0)
       case sendMsg (mkNode timeout) (Tick 0) of
         (msgs, _) -> msgs `shouldBe` []
   context "when a node reaches its election timeout" $
     it "calls an election" $ do
-      let timeout = 1
+      let timeout = (1, 1, 0)
           (msgs, _) = sendMsg (mkNode timeout) (Tick 0)
       case msgs of
         [RequestVoteReq from to rpc] -> do
@@ -61,7 +62,7 @@ testElectionTimeout = do
 
 testHeartbeatTimeout :: Spec
 testHeartbeatTimeout = do
-  let mkNode timeout = mkServerState 0 [1] 10 timeout NoOp
+  let mkNode timeout = mkServerState 0 [1] (10, 10, 0) timeout NoOp
   context "when a node is not a leader" $
     it "does not send heartbeats" $ do
       let node = (mkNode 1) { _role = Follower }
@@ -88,7 +89,7 @@ testHeartbeatTimeout = do
 
 testAppendEntries :: Spec
 testAppendEntries = do
-  let mkNode = mkServerState 0 [1] 10 10 NoOp
+  let mkNode = mkServerState 0 [1] (10, 10, 0) 10 NoOp
   context "when the message's term is less than the node's term" $ do
     let node = mkNode { _serverTerm = 2 }
         appendEntriesPayload = AppendEntries { _LeaderTerm = 1
@@ -112,7 +113,7 @@ testAppendEntries = do
         req = AppendEntriesReq 1 0 appendEntriesPayload
     it "replies with false" $
       case sendMsg node req of
-        (msgs, _) -> msgs `shouldBe` [AppendEntriesRes 0 1 (1, False)]
+        (msgs, _) -> msgs `shouldBe` [AppendEntriesRes 0 1 (0, False)]
   context "when the log contains a conflicting entry" $ do
     let zerothEntry = mkLogEntry 0 0
         firstEntry = mkLogEntry 1 1
@@ -130,7 +131,7 @@ testAppendEntries = do
     it "deletes the entry and all that follow it" $ do
       let (msgs, node') = sendMsg mkNode req1
       node'^.entryLog `shouldBe` [zerothEntry, firstEntry, secondEntry]
-      msgs `shouldBe` [AppendEntriesRes 0 1 (1, True)]
+      msgs `shouldBe` [AppendEntriesRes 0 1 (0, True)]
       case sendMsg node' req2 of
         (_, node'') -> node''^.entryLog `shouldBe` [zerothEntry, thirdEntry]
   context "when the log contains a valid entry" $ do
@@ -147,7 +148,7 @@ testAppendEntries = do
     it "appends it to the log" $
       case sendMsg mkNode req of
         (msgs, node') -> do
-          msgs `shouldBe` [AppendEntriesRes 0 1 (1, True)]
+          msgs `shouldBe` [AppendEntriesRes 0 1 (0, True)]
           node'^.entryLog `shouldBe` [zerothEntry, firstEntry]
   context "when leaderCommit > node's commitIndex" $ do
     let zerothEntry = mkLogEntry 0 0
@@ -163,7 +164,7 @@ testAppendEntries = do
       it "sets commitIndex = leaderCommit" $
         case sendMsg mkNode req of
           (msgs, node') -> do
-            msgs `shouldBe` [AppendEntriesRes 0 1 (1, True)]
+            msgs `shouldBe` [AppendEntriesRes 0 1 (0, True)]
             node'^.commitIndex `shouldBe` 1
     context "and leaderCommit > index of last new entry" $ do
       let req = AppendEntriesReq 1 0 AppendEntries { _LeaderTerm = 1
@@ -175,7 +176,7 @@ testAppendEntries = do
       it "sets commitIndex = index of last new entry" $
         case sendMsg mkNode req of
           (msgs, node') -> do
-            msgs `shouldBe` [AppendEntriesRes 0 1 (1, True)]
+            msgs `shouldBe` [AppendEntriesRes 0 1 (0, True)]
             node'^.commitIndex `shouldBe` 2
   context "when leaderCommit <= node's commitIndex" $ do
     let zerothEntry = mkLogEntry 0 0
@@ -191,7 +192,7 @@ testAppendEntries = do
     it "does not modify commitIndex" $
       case res of
         (msgs, node') -> do
-          msgs `shouldBe` [AppendEntriesRes 0 1 (1, True)]
+          msgs `shouldBe` [AppendEntriesRes 0 1 (0, True)]
           node'^.commitIndex `shouldBe` 0
 
 -- TODO: test case where there are 3 nodes, but log is only committed on leader
@@ -199,7 +200,7 @@ testAppendEntries = do
 
 testRequestVote :: Spec
 testRequestVote = do
-  let mkNode = mkServerState 0 [1] 10 10 NoOp
+  let mkNode = mkServerState 0 [1] (10, 10, 0) 10 NoOp
       req cTerm lTerm lIndex = RequestVoteReq 1 0 RequestVote { _CandidateTerm = cTerm
                                                               , _CandidateId = 1
                                                               , _LastLogIndex = lIndex
@@ -214,11 +215,11 @@ testRequestVote = do
     context "and candidate's log is as up-to-date as receiver's log" $
       it "grants vote" $
         case sendMsg node (req 1 0 0) of
-          (msgs, _) -> msgs `shouldBe` [RequestVoteRes 0 1 (1, True)]
+          (msgs, _) -> msgs `shouldBe` [RequestVoteRes 0 1 (0, True)]
     context "and candidate's log is more up-to-date than receiver's log" $
       it "grants vote" $
         case sendMsg node (req 2 2 2) of
-          (msgs, _) -> msgs `shouldBe` [RequestVoteRes 0 1 (2, True)]
+          (msgs, _) -> msgs `shouldBe` [RequestVoteRes 0 1 (0, True)]
     context "and candidate's log is not as up-to-date as receiver's log" $ do
       let zerothEntry = mkLogEntry 0 0
           firstEntry = mkLogEntry 1 1
@@ -231,11 +232,11 @@ testRequestVote = do
     context "and candidate's log is as up-to-date as receiver's log" $
       it "grants vote" $
         case sendMsg node (req 1 0 0) of
-          (msgs, _) -> msgs `shouldBe` [RequestVoteRes 0 1 (1, True)]
+          (msgs, _) -> msgs `shouldBe` [RequestVoteRes 0 1 (0, True)]
     context "and candidate's log is more up-to-date than receiver's log" $
       it "grants vote" $
         case sendMsg node (req 2 2 2) of
-          (msgs, _) -> msgs `shouldBe` [RequestVoteRes 0 1 (2, True)]
+          (msgs, _) -> msgs `shouldBe` [RequestVoteRes 0 1 (0, True)]
     context "and candidate's log is not as up-to-date as receiver's log" $ do
       let zerothEntry = mkLogEntry 0 0
           firstEntry = mkLogEntry 1 1
@@ -247,4 +248,4 @@ testRequestVote = do
     let node = mkNode { _serverTerm = 0, _votedFor = Just 2 }
     it "does not grant vote" $
       case sendMsg node (req 1 0 0) of
-        (msgs, _) -> msgs `shouldBe` [RequestVoteRes 0 1 (1, False)]
+        (msgs, _) -> msgs `shouldBe` [RequestVoteRes 0 1 (0, False)]

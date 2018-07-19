@@ -1,11 +1,8 @@
-import           Control.Monad.Log
+import           Control.Monad.Logger
 import           Control.Monad.State.Strict
-import           Control.Monad.Writer.Strict
 import           Data.Functor.Identity
-import qualified Data.HashMap.Strict         as Map
-import           Data.List                   (partition, sortOn)
-import           Data.Maybe                  (fromJust)
-import qualified Data.Text.IO                as T (putStrLn)
+import qualified Data.HashMap.Strict        as Map
+import           Data.List                  (partition, sortOn)
 
 import           Raft
 import           Raft.Server
@@ -19,7 +16,7 @@ type Response = ()
 newtype StateMachine = StateMachine { value :: Int }
   deriving (Eq, Show)
 
-type StateMachineM = StateT StateMachine Identity
+type StateMachineM = StateT StateMachine (NoLoggingT Identity)
 
 apply :: Command -> StateMachineM ()
 apply NoOp    = pure ()
@@ -27,9 +24,9 @@ apply (Set i) = put StateMachine { value = i }
 
 main = do
   let s0 :: (ServerState Command, StateMachine)
-      s0 = mkServer 0 [1, 2] 30 20
-      s1 = mkServer 1 [0, 2] 40 20
-      s2 = mkServer 2 [0, 1] 50 20
+      s0 = mkServer 0 [1, 2] (30, 30, 0) 20
+      s1 = mkServer 1 [0, 2] (40, 40, 0) 20
+      s2 = mkServer 2 [0, 1] (50, 50, 0) 20
       servers = Map.insert 2 s2 $ Map.insert 1 s1 $ Map.insert 0 s0 Map.empty
   testLoop servers mkClient
 
@@ -59,9 +56,9 @@ testLoop s = go s 0
               if time <= clock
                 then handleMessage apply msg
                 else pure []
-            res = runIdentity $ runStateT (runStateT (runPureLoggingT run) state) machine
+            res = runIdentity $ runNoLoggingT $ runStateT (runStateT run state) machine
         case res of
-          (((msgs, _), state'), machine') -> do
+          ((msgs,  state'), machine') -> do
             let (_, rest) = partition isClientResponse msgs
             let servers' = Map.insert r (state', machine') servers
             print msg
@@ -91,7 +88,7 @@ recipient msg =
 mkServer ::
      ServerId
   -> [ServerId]
-  -> MonotonicCounter
+  -> (Int, Int, Int)
   -> MonotonicCounter
   -> (ServerState Command, StateMachine)
 mkServer serverId otherServerIds electionTimeout heartbeatTimeout =
