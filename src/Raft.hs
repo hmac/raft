@@ -15,6 +15,7 @@ import           Data.Ratio                  ((%))
 import qualified Data.Text                   as T
 import           Data.Typeable               (Typeable)
 import           GHC.Generics                (Generic)
+import           GHC.Stack                   (HasCallStack)
 import           Prelude                     hiding (log, (!!))
 import           Safe                        (atMay)
 import qualified Safe                        (at)
@@ -59,10 +60,10 @@ handleMessage apply m = snd <$> runWriterT go
     handler =
       case m of
         Tick _                     -> handleTick apply
-        AppendEntriesReq from to r -> handleAppendEntriesReq from to r
-        AppendEntriesRes from to r -> handleAppendEntriesRes from to r apply
-        RequestVoteReq from to r   -> handleRequestVoteReq from to r
-        RequestVoteRes from to r   -> handleRequestVoteRes from to r
+        AppendEntriesReq from to r -> checkForNewLeader (r^.leaderTerm) >> handleAppendEntriesReq from to r
+        AppendEntriesRes from to r -> checkForNewLeader (fst r) >> handleAppendEntriesRes from to r apply
+        RequestVoteReq from to r   -> checkForNewLeader (r^.candidateTerm) >> handleRequestVoteReq from to r
+        RequestVoteRes from to r   -> checkForNewLeader (fst r) >> handleRequestVoteRes from to r
         ClientRequest _ reqId r    -> handleClientRequest reqId r
 
 handleTick :: MonadLogger m => (a -> m b) -> ServerT a b m ()
@@ -80,20 +81,19 @@ handleTick apply = do
 
 handleAppendEntriesReq :: MonadLogger m => ServerId -> ServerId -> AppendEntries a -> ServerT a b m ()
 handleAppendEntriesReq from to r = do
-  checkForNewLeader r
   success <- handleAppendEntries r
   electionTimer .= 0
   updatedTerm <- use serverTerm
   tell [AppendEntriesRes to from (updatedTerm, success)]
 
-checkForNewLeader :: MonadLogger m => AppendEntries a -> ServerT a b m ()
-checkForNewLeader r = do
-  let rpcTerm = r^.leaderTerm
+checkForNewLeader :: MonadLogger m => Term -> ServerT a b m ()
+checkForNewLeader rpcTerm = do
   currentTerm <- use serverTerm
   isCandidateOrLeader <- (/= Follower) <$> use role
-  when (isCandidateOrLeader && rpcTerm > currentTerm) $ do
+  when (rpcTerm > currentTerm) $ do
     logInfoN $ T.pack $ "Received RPC with term " ++ (show . unTerm) rpcTerm ++ " > current term " ++ (show . unTerm) currentTerm
-    convertToFollower rpcTerm
+    serverTerm .= rpcTerm
+    when isCandidateOrLeader convertToFollower
 
 handleAppendEntriesRes :: MonadLogger m => ServerId -> ServerId -> (Term, Bool) -> (a -> m b) -> ServerT a b m ()
 handleAppendEntriesRes from to (term, success) apply = do
@@ -260,15 +260,14 @@ findEntry l i t =
 
 findByIndex :: Log a -> LogIndex -> Maybe (LogEntry a)
 findByIndex _ i | i < 0 = Nothing
-findByIndex l i | i > toInteger (length l) = Nothing
+findByIndex l i | i >= toInteger (length l) = Nothing
 findByIndex l i = Just $ l !! fromInteger i
 
 -- `leaderTerm` is the updated term communicated via an RPC req/res
-convertToFollower :: MonadLogger m => Term -> ServerT a b m ()
-convertToFollower leaderTerm = do
+convertToFollower :: MonadLogger m => ServerT a b m ()
+convertToFollower = do
   logInfoN "converting to follower"
   role .= Follower
-  serverTerm .= leaderTerm
   votesReceived .= 0
   votedFor .= Nothing
 
@@ -302,7 +301,16 @@ convertToLeader :: MonadLogger m => ServerT a b m ()
 convertToLeader = do
   logInfoN "converting to leader"
   role .= Leader
+
+  -- When a leader first comes to power, it initializes all nextIndex values
+  -- to the index just after the last one in its log.
+  latestLogIndex <- (^.index) . last <$> use entryLog
+  sids <- use serverIds
+  nextIndex .= mkNextIndex latestLogIndex sids
+
   sendHeartbeats
+  where mkNextIndex :: LogIndex -> [ServerId] -> Map.HashMap ServerId LogIndex
+        mkNextIndex logIndex = foldl (\m sid -> Map.insert sid (logIndex + 1) m) Map.empty
 
 sendHeartbeats :: MonadLogger m => ServerT a b m ()
 sendHeartbeats = do
@@ -328,6 +336,8 @@ sendAppendEntries followerId logIndex = do
   selfId <- use selfId
   log <- use entryLog
   commitIndex <- use commitIndex
+  logInfoN $ T.pack $ "logIndex: " ++ show logIndex
+  logInfoN $ T.pack $ "log length: " ++ show (length log)
   let entry = log !! fromInteger logIndex
       prevEntry = log !! fromInteger (logIndex - 1)
       ae = AppendEntries { _LeaderTerm = currentTerm

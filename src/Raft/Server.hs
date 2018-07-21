@@ -19,7 +19,10 @@ import           Raft.Log
 -- Server IDs start at 0 and increase monotonically
 newtype ServerId = ServerId
   { unServerId :: Int
-  } deriving (Eq, Ord, Num, Show, Generic, Hashable, Typeable, Binary)
+  } deriving (Eq, Ord, Num, Generic, Hashable, Typeable, Binary)
+
+instance Show ServerId where
+  show ServerId { unServerId = i } = show i
 
 newtype MonotonicCounter = MonotonicCounter
   { unMonotonicCounter :: Integer

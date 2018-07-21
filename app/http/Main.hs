@@ -8,6 +8,7 @@
 module Main where
 
 import           Control.Concurrent
+import           Control.Monad.Logger
 import           Control.Monad.State.Strict
 import           Data.Aeson
 import qualified Data.Map.Strict            as Map
@@ -26,8 +27,9 @@ import           Raft.Server                (MonotonicCounter (..), ServerId,
                                              mkServerState)
 import           Servant
 import           Servant.Client
-import qualified Server                     as S (Config (..), printLog,
-                                                  processMessage, runServer)
+import qualified Server                     as S (Config (..), logState,
+                                                  printLog, processMessage,
+                                                  processTick)
 import           System.Environment         (getArgs)
 import           System.Random
 
@@ -153,22 +155,22 @@ server config =
   serveClientRequest config
 
 serveGeneric :: RaftMessage a => Config -> a -> Handler ()
-serveGeneric config req = liftIO $ S.processMessage config (toRaftMessage req)
+serveGeneric config req = liftIO $ runLogger $ S.processMessage config (toRaftMessage req)
 
 serveClientRequest :: Config -> ClientReq -> Handler ClientRes
-serveClientRequest config req = liftIO $ do
+serveClientRequest config req = liftIO $ runLogger $ do
   let reqId = cReqId req
       reqMapVar = S.requests config
   -- insert this request into the request map
-  var <- newEmptyMVar
-  modifyMVar_ reqMapVar (pure . Map.insert reqId var)
-  S.printLog "Processing client request"
+  var <- liftIO newEmptyMVar
+  liftIO $ modifyMVar_ reqMapVar (pure . Map.insert reqId var)
+  logInfoN "Processing client request"
   S.processMessage config (toRaftMessage req)
-  S.printLog "Waiting for response to request"
-  resp <- readMVar var -- we'll block here until the response is ready
+  logInfoN "Waiting for response to request"
+  resp <- liftIO $ readMVar var -- we'll block here until the response is ready
   -- now we have the response, clear it from the request map
-  S.printLog "Response found"
-  modifyMVar_ reqMapVar (pure . Map.delete reqId)
+  logInfoN "Response found"
+  liftIO $ modifyMVar_ reqMapVar (pure . Map.delete reqId)
   case fromRaftMessage resp of
     Nothing -> error "could not decode client response"
     Just r  -> pure r
@@ -203,58 +205,67 @@ main = do
   queue <- newChan
   reqMap <- newMVar Map.empty
   let config = S.Config { S.state = serverState, S.queue = queue, S.apply = apply, S.requests = reqMap }
-  _ <- S.runServer config
+  _ <- forkForever $  runLogger (S.logState config)
+  _ <- forkForever $ do
+    threadDelay 1000 -- 1ms
+    runLogger (S.processTick config)
   manager <- newManager defaultManagerSettings
-  _ <- forkIO (deliverMessages config manager)
+  _ <- forkForever $ runLogger (deliverMessages config manager)
   run (baseUrlPort url) (app config)
 
-deliverMessages :: Config -> Manager -> IO ()
-deliverMessages config manager = forever $ do
-  m <- readChan (S.queue config)
+runLogger :: LoggingT IO a -> IO a
+runLogger = runStderrLoggingT
+
+forkForever :: IO () -> IO ThreadId
+forkForever = forkIO . forever
+
+deliverMessages :: Config -> Manager -> LoggingT IO ()
+deliverMessages config manager = do
+  m <- liftIO $ readChan (S.queue config)
   let url = fromJust $ Map.lookup (rpcTo m) serverAddrs
       env = ClientEnv manager url
   sendRpc m env config
 
 -- TODO: if RPC cannot be delivered, enqueue it for retry
-sendRpc :: Message -> ClientEnv -> Config -> IO ()
+sendRpc :: Message -> ClientEnv -> Config -> LoggingT IO ()
 sendRpc rpc env config =
   case rpc of
     r@Raft.RequestVoteReq{} -> do
       let rpc = (sendRequestVoteReq . fromJust . fromRaftMessage) r
-      res <- runClientM rpc env
+      res <- run rpc env
       case res of
-        Left err -> putStrLn "Error sending RequestVoteReq RPC"
+        Left err -> logDebugN "Error sending RequestVoteReq RPC"
         Right _  -> pure ()
     r@Raft.AppendEntriesReq{} -> do
       let rpc = (sendAppendEntriesReq . fromJust . fromRaftMessage) r
-      res <- runClientM rpc env
+      res <- run rpc env
       case res of
-        Left err -> putStrLn "Error sending AppendEntriesReq RPC"
+        Left err -> logDebugN "Error sending AppendEntriesReq RPC"
         Right () -> pure ()
     r@Raft.RequestVoteRes{} -> do
       let rpc = (sendRequestVoteRes . fromJust . fromRaftMessage) r
-      res <- runClientM rpc env
+      res <- run rpc env
       case res of
-        Left err -> putStrLn "Error sending RequestVoteRes RPC"
+        Left err -> logDebugN "Error sending RequestVoteRes RPC"
         Right _  -> pure ()
     r@Raft.AppendEntriesRes{} -> do
       let rpc = (sendAppendEntriesRes . fromJust . fromRaftMessage) r
-      res <- runClientM rpc env
+      res <- run rpc env
       case res of
-        Left err -> putStrLn "Error sending AppendEntriesRes RPC"
+        Left err -> logDebugN "Error sending AppendEntriesRes RPC"
         Right () -> pure ()
     r@(Raft.ClientResponse _ reqId _) -> do
       -- if we get a client response, we need to find the request that it
       -- originated from and place it in the corresponding MVar in
       -- config.requests
-      S.printLog "Processing client response"
-      reqs <- readMVar (S.requests config)
+      logDebugN "Processing client response"
+      reqs <- liftIO $ readMVar (S.requests config)
       case Map.lookup reqId reqs of
-        Nothing     -> do
-          -- assume that the request was made to a different node
-          S.printLog $ T.pack $ "Ignoring client request [" ++ show (unRequestId reqId) ++ "] - not present in map"
-        Just resVar -> putMVar resVar r
+        -- assume that the request was made to a different node
+        Nothing     -> logInfoN $ T.pack $ "Ignoring client request [" ++ show (unRequestId reqId) ++ "] - not present in map"
+        Just resVar -> liftIO $ putMVar resVar r
     r -> error $ "Unexpected rpc: " ++ show r
+  where run rpc env = liftIO $ runClientM rpc env
 
 serverAddrs :: Map.Map ServerId BaseUrl
 serverAddrs = Map.fromList [(1, BaseUrl Http "localhost" 10501 "")

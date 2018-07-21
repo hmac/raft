@@ -2,7 +2,6 @@
 module Server where
 
 import           Control.Concurrent
-import           Control.Monad              (forever)
 import           Control.Monad.Logger
 import           Control.Monad.State.Strict hiding (state)
 import           Data.Map.Strict            (Map)
@@ -12,8 +11,7 @@ import           Data.Time.Format           (defaultTimeLocale, formatTime,
                                              iso8601DateFormat)
 import           Raft
 import           Raft.Log                   (RequestId)
-import           Raft.Server                (ServerState (..), readTimeout,
-                                             unMonotonicCounter)
+import           Raft.Server                (ServerState (..))
 
 data Config a b machine = Config { state :: MVar (ServerState a, machine)
                                  , queue :: Chan (Message a b)
@@ -21,29 +19,24 @@ data Config a b machine = Config { state :: MVar (ServerState a, machine)
                                  , requests :: MVar (Map RequestId (MVar (Message a b)))
                                  }
 
-runServer :: (Show a, Show machine) => Config a b machine -> IO ThreadId
-runServer config = forkIO $ do
-  _ <- forkIO $ forever (logState config)
-  forever $ do
-    threadDelay 1000 -- 1ms
-    processMessage config (Tick 0)
-
-logState :: (Show a, Show machine) => Config a b machine -> IO ()
+logState :: (Show a, Show machine) => Config a b machine -> LoggingT IO ()
 logState Config { state } = do
-  threadDelay 2000000
-  (ServerState { _role, _serverTerm, _electionTimer, _electionTimeout }, m) <- readMVar state
-  print (_role, _serverTerm, unMonotonicCounter _electionTimer, (unMonotonicCounter . readTimeout) _electionTimeout, m)
+  liftIO $ threadDelay 2000000
+  (ServerState { _role, _serverTerm, _electionTimer, _electionTimeout }, m) <- liftIO $ readMVar state
+  (logInfoN . T.pack . show) (_role, _serverTerm, m)
 
 -- Apply a Raft message to the state
--- Prints out any logs generated
-processMessage :: Config a b machine -> Message a b -> IO ()
+processMessage :: Config a b machine -> Message a b -> LoggingT IO ()
 processMessage Config { state, queue, apply } msg = do
-  (s, m) <- takeMVar state
-  (msgs, server', machine') <- runStderrLoggingT (handleMessage_ s m msg apply)
-  putMVar state (server', machine')
-  writeList2Chan queue msgs
+  (s, m) <- liftIO $ takeMVar state
+  (msgs, server', machine') <- handleMessage_ s m msg apply
+  liftIO $ putMVar state (server', machine')
+  liftIO $ writeList2Chan queue msgs
 
-handleMessage_ :: ServerState a -> machine -> Message a b -> (a -> StateT machine (LoggingT IO) b) -> LoggingT IO ([Message a b], ServerState a, machine)
+processTick :: Config a b machine -> LoggingT IO ()
+processTick config = processMessage config (Tick 0)
+
+handleMessage_ :: MonadIO m => ServerState a -> machine -> Message a b -> (a -> StateT machine (LoggingT m) b) -> LoggingT m ([Message a b], ServerState a, machine)
 handleMessage_ server machine msg apply = do
   ((msgs, server'), machine') <- runStateT (runStateT (handleMessage apply msg) server) machine
   pure (msgs, server', machine')
