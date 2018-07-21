@@ -7,9 +7,7 @@ to be `IO`.
 
 The function signature is as follows
 ```haskell
-handleMessage :: MonadPlus m => (a -> m ())
-                             -> Message a
-                             -> ExtServerT a m [Message a]
+handleMessage :: MonadLogger m => Message a -> ExtServerT a m [Message a]
 ```
 
 Roughly, this says that the function takes a `Message` and returns an
@@ -20,32 +18,29 @@ passing it a `Message` via `handleMessage`.
 
 The `Message` type is as follows
 ```haskell
-data Message a =
+data Message a b =
     AppendEntriesReq ServerId ServerId (AppendEntries a)
   | AppendEntriesRes ServerId ServerId (Term, Bool)
   | RequestVoteReq ServerId ServerId (RequestVote a)
   | RequestVoteRes ServerId ServerId (Term, Bool)
   | Tick ServerId
-  | ClientRequest ServerId a
+  | ClientRequest ServerId RequestId a
+  | ClientResponse ServerId RequestId (Either T.Text b)
 ```
 
 That is, an ADT with a variant for each RPC request and response, client
-requests (e.g. read this value, write this value) and a final variant called
-`Tick`, which represents a change in time. Because the implementation is
-entirely pure, the evolution of time must be communicated to the node via a
-message. This makes it possible to test all sorts of different time-based
-scenarios, such as slow clocks, out of sync clocks, network latency, etc.
-
-On top of this library, there's a working example that uses Cloud Haskell to
-create three independent Raft nodes which communicate entirely via `Message`s.
-Each node is paired with a 'clock' process which provides `Tick`s for it.
+requests and responses (e.g. read this value, write this value) and a final
+variant called `Tick`, which represents a change in time. Because the
+implementation is entirely pure, the evolution of time must be communicated to
+the node via a message. This makes it possible to test all sorts of different
+time-based scenarios, such as slow clocks, out of sync clocks, network latency,
+etc.
 
 ## Implemented features
 - A working implementation of the core algorithm (log replication and leader
   election).
 - Unit tests for the behaviour of nodes in response to the two RPC calls.
 - A basic integration test of a three-node cluster, with simulated clocks.
-- A working example three-node cluster simulation using Cloud Haskell.
 - A prototype implementation over HTTP
   - Clients can send read/write requests and receive responses
 
