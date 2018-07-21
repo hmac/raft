@@ -29,6 +29,8 @@ import           Raft.Server
 (!!) :: [a] -> Int -> a
 (!!) = Safe.at
 
+-- TODO: AppendEntriesRes should include the latest replicated log index, so the
+-- leader can update nextIndex
 data Message a b =
     AppendEntriesReq ServerId ServerId (AppendEntries a)
   | AppendEntriesRes ServerId ServerId (Term, Bool)
