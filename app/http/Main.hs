@@ -38,6 +38,7 @@ newtype StateMachine = StateMachine { value :: Int } deriving (Eq, Show)
 type StateMachineT m = StateT StateMachine m
 
 -- A command set for the state machine
+-- TODO: could we combine these into a single Free Monad?
 data Command = NoOp | Get | Set Int deriving (Eq, Show, Generic, FromJSON, ToJSON)
 data CommandResponse = CRRead Int | CRUnit deriving (Eq, Show, Generic, FromJSON, ToJSON)
 
@@ -273,16 +274,17 @@ serverAddrs = Map.fromList [(1, BaseUrl Http "localhost" 10501 "")
                           , (3, BaseUrl Http "localhost" 10503 "")]
 
 mkServer ::
+  Monad m =>
      ServerId
   -> [ServerId]
   -> (Int, Int, Int)
   -> MonotonicCounter
-  -> (ServerState Command, StateMachine)
+  -> (ServerState Command CommandResponse (StateMachineT m), StateMachine)
 mkServer self others electionTimeout heartbeatTimeout =
   (serverState, StateMachine {value = 0})
   where
     serverState =
-      mkServerState self others electionTimeout heartbeatTimeout NoOp
+      mkServerState self others electionTimeout heartbeatTimeout NoOp apply
 
 rpcTo :: Message -> ServerId
 rpcTo (Raft.AppendEntriesReq _ to _) = to

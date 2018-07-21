@@ -13,7 +13,7 @@ import           Raft
 import           Raft.Log                   (RequestId)
 import           Raft.Server                (ServerState (..))
 
-data Config a b machine = Config { state :: MVar (ServerState a, machine)
+data Config a b machine = Config { state :: MVar (ServerState a b (StateT machine (LoggingT IO)), machine)
                                  , queue :: Chan (Message a b)
                                  , apply :: a -> StateT machine (LoggingT IO) b
                                  , requests :: MVar (Map RequestId (MVar (Message a b)))
@@ -27,18 +27,18 @@ logState Config { state } = do
 
 -- Apply a Raft message to the state
 processMessage :: Config a b machine -> Message a b -> LoggingT IO ()
-processMessage Config { state, queue, apply } msg = do
+processMessage Config { state, queue } msg = do
   (s, m) <- liftIO $ takeMVar state
-  (msgs, server', machine') <- handleMessage_ s m msg apply
+  (msgs, server', machine') <- handleMessage_ s m msg
   liftIO $ putMVar state (server', machine')
   liftIO $ writeList2Chan queue msgs
 
 processTick :: Config a b machine -> LoggingT IO ()
 processTick config = processMessage config (Tick 0)
 
-handleMessage_ :: MonadIO m => ServerState a -> machine -> Message a b -> (a -> StateT machine (LoggingT m) b) -> LoggingT m ([Message a b], ServerState a, machine)
-handleMessage_ server machine msg apply = do
-  ((msgs, server'), machine') <- runStateT (runStateT (handleMessage apply msg) server) machine
+handleMessage_ :: MonadIO m => ServerState a b (StateT machine (LoggingT m)) -> machine -> Message a b -> LoggingT m ([Message a b], ServerState a b (StateT machine (LoggingT m)), machine)
+handleMessage_ server machine msg = do
+  ((msgs, server'), machine') <- runStateT (runStateT (handleMessage msg) server) machine
   pure (msgs, server', machine')
 
 printLog :: T.Text -> IO ()

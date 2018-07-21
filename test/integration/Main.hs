@@ -5,7 +5,7 @@ import qualified Data.HashMap.Strict        as Map
 import           Data.List                  (partition, sortOn)
 
 import           Raft
-import           Raft.Server
+import           Raft.Server                hiding (apply)
 
 data Command =
     NoOp
@@ -18,15 +18,17 @@ newtype StateMachine = StateMachine { value :: Int }
 
 type StateMachineM = StateT StateMachine (NoLoggingT Identity)
 
+-- apply is a lens on StateMachine that we don't want to clash with
 apply :: Command -> StateMachineM ()
 apply NoOp    = pure ()
 apply (Set i) = put StateMachine { value = i }
 
+main :: IO ()
 main = do
-  let s0 :: (ServerState Command, StateMachine)
-      s0 = mkServer 0 [1, 2] (30, 30, 0) 20
-      s1 = mkServer 1 [0, 2] (40, 40, 0) 20
-      s2 = mkServer 2 [0, 1] (50, 50, 0) 20
+  let s0 :: (ServerState Command () StateMachineM, StateMachine)
+      s0 = mkServer 0 [1, 2] (30, 30, 0) 20 apply
+      s1 = mkServer 1 [0, 2] (40, 40, 0) 20 apply
+      s2 = mkServer 2 [0, 1] (50, 50, 0) 20 apply
       servers = Map.insert 2 s2 $ Map.insert 1 s1 $ Map.insert 0 s0 Map.empty
   testLoop servers mkClient
 
@@ -40,7 +42,7 @@ mkClient = [(500, ClientRequest 0 0 (Set 42))
           , (1521, Tick 2)] -- wait for the followers to apply their logs
 
 testLoop ::
-     Map.HashMap ServerId (ServerState Command, StateMachine) -> Client -> IO ()
+     Map.HashMap ServerId (ServerState Command () StateMachineM, StateMachine) -> Client -> IO ()
 testLoop s = go s 0
   where
     go servers _ [] =
@@ -54,7 +56,7 @@ testLoop s = go s 0
             (state, machine) = servers Map.! r
             run =
               if time <= clock
-                then handleMessage apply msg
+                then handleMessage msg
                 else pure []
             res = runIdentity $ runNoLoggingT $ runStateT (runStateT run state) machine
         case res of
@@ -90,8 +92,9 @@ mkServer ::
   -> [ServerId]
   -> (Int, Int, Int)
   -> MonotonicCounter
-  -> (ServerState Command, StateMachine)
-mkServer serverId otherServerIds electionTimeout heartbeatTimeout =
+  -> (Command -> StateMachineM ())
+  -> (ServerState Command () StateMachineM, StateMachine)
+mkServer serverId otherServerIds electionTimeout heartbeatTimeout apply =
   (serverState, StateMachine {value = 0})
   where
     serverState =
@@ -101,3 +104,4 @@ mkServer serverId otherServerIds electionTimeout heartbeatTimeout =
         electionTimeout
         heartbeatTimeout
         NoOp
+        apply

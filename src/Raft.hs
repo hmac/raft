@@ -15,7 +15,6 @@ import           Data.Ratio                  ((%))
 import qualified Data.Text                   as T
 import           Data.Typeable               (Typeable)
 import           GHC.Generics                (Generic)
-import           GHC.Stack                   (HasCallStack)
 import           Prelude                     hiding (log, (!!))
 import           Safe                        (atMay)
 import qualified Safe                        (at)
@@ -46,31 +45,32 @@ instance (Binary a, Binary b) => Binary (Message a b)
 deriving instance (Show a, Show b) => Show (Message a b)
 deriving instance (Eq a, Eq b) => Eq (Message a b)
 
-type ExtServerT a m = StateT (ServerState a) m
-type ServerT a b m = WriterT [Message a b] (ExtServerT a m)
+type ExtServerT a b m = StateT (ServerState a b m) m
+type ServerT a b m = WriterT [Message a b] (ExtServerT a b m)
 
 -- The entrypoint to a Raft node
 -- This function takes a Message and handles it, updating the node's state and
 -- generating any messages to send in response.
 handleMessage ::
-     MonadLogger m => (a -> m b) -> Message a b -> ExtServerT a m [Message a b]
-handleMessage apply m = snd <$> runWriterT go
+     MonadLogger m => Message a b -> ExtServerT a b m [Message a b]
+handleMessage m = snd <$> runWriterT go
   where
-    go = applyCommittedLogEntries apply >> handler
+    go = applyCommittedLogEntries >> handler
     handler =
       case m of
-        Tick _                     -> handleTick apply
-        AppendEntriesReq from to r -> checkForNewLeader (r^.leaderTerm) >> handleAppendEntriesReq from to r
-        AppendEntriesRes from to r -> checkForNewLeader (fst r) >> handleAppendEntriesRes from to r apply
-        RequestVoteReq from to r   -> checkForNewLeader (r^.candidateTerm) >> handleRequestVoteReq from to r
-        RequestVoteRes from to r   -> checkForNewLeader (fst r) >> handleRequestVoteRes from to r
+        Tick _                     -> handleTick
+        AppendEntriesReq from to r -> handleAppendEntriesReq from to r -- we check for new term if AppendEntries succeeds
+        AppendEntriesRes from to r -> checkForNewTerm (fst r) >> handleAppendEntriesRes from to r
+        RequestVoteReq from to r   -> checkForNewTerm (r^.candidateTerm) >> handleRequestVoteReq from to r
+        RequestVoteRes from to r   -> checkForNewTerm (fst r) >> handleRequestVoteRes from to r
         ClientRequest _ reqId r    -> handleClientRequest reqId r
+        ClientResponse{}           -> undefined -- what could/should we do here?
 
-handleTick :: MonadLogger m => (a -> m b) -> ServerT a b m ()
-handleTick apply = do
+handleTick :: MonadLogger m => ServerT a b m ()
+handleTick = do
   -- if election timeout elapses without receiving AppendEntries RPC from current
   -- leader or granting vote to candidate, convert to candidate
-  applyCommittedLogEntries apply
+  applyCommittedLogEntries
   electionTimer' <- electionTimer <+= 1
   heartbeatTimer' <- heartbeatTimer <+= 1
   role <- use role
@@ -82,12 +82,13 @@ handleTick apply = do
 handleAppendEntriesReq :: MonadLogger m => ServerId -> ServerId -> AppendEntries a -> ServerT a b m ()
 handleAppendEntriesReq from to r = do
   success <- handleAppendEntries r
+  when success $ checkForNewTerm (r^.leaderTerm)
   electionTimer .= 0
   updatedTerm <- use serverTerm
   tell [AppendEntriesRes to from (updatedTerm, success)]
 
-checkForNewLeader :: MonadLogger m => Term -> ServerT a b m ()
-checkForNewLeader rpcTerm = do
+checkForNewTerm :: MonadLogger m => Term -> ServerT a b m ()
+checkForNewTerm rpcTerm = do
   currentTerm <- use serverTerm
   isCandidateOrLeader <- (/= Follower) <$> use role
   when (rpcTerm > currentTerm) $ do
@@ -95,8 +96,8 @@ checkForNewLeader rpcTerm = do
     serverTerm .= rpcTerm
     when isCandidateOrLeader convertToFollower
 
-handleAppendEntriesRes :: MonadLogger m => ServerId -> ServerId -> (Term, Bool) -> (a -> m b) -> ServerT a b m ()
-handleAppendEntriesRes from to (term, success) apply = do
+handleAppendEntriesRes :: MonadLogger m => ServerId -> ServerId -> (Term, Bool) -> ServerT a b m ()
+handleAppendEntriesRes from to (term, success) = do
   isLeader <- (== Leader) <$> use role
   when isLeader $ do
     -- N.B. need to "update nextIndex and matchIndex for follower"
@@ -112,7 +113,7 @@ handleAppendEntriesRes from to (term, success) apply = do
         nextIndex . at from ?= next'
         matchIndex . at from ?= match'
         checkCommitIndex
-        applyCommittedLogEntries apply
+        applyCommittedLogEntries
         unless success (sendAppendEntries from next')
       _ -> error "expected nextIndex and matchIndex to have element!"
 
@@ -377,8 +378,9 @@ checkCommitIndex = do
 --   increment lastApplied
 --   apply log[lastApplied] to state machine
 --   broadcast "log applied" event (this is a form of client response)
-applyCommittedLogEntries :: MonadLogger m => (a -> m b) -> ServerT a b m ()
-applyCommittedLogEntries apply = do
+applyCommittedLogEntries :: MonadLogger m => ServerT a b m ()
+applyCommittedLogEntries = do
+  apply <- use apply
   lastAppliedIndex <- use lastApplied
   lastCommittedIndex <- use commitIndex
   log <- use entryLog

@@ -30,10 +30,9 @@ newtype MonotonicCounter = MonotonicCounter
 
 data Role = Follower | Candidate | Leader deriving (Eq, Show)
 
-data ServerState a = ServerState
-  {
+data ServerState a b machineM = ServerState
   -- the server's ID
-  _selfId             :: ServerId
+  { _selfId           :: ServerId
   -- all other server IDs (TODO: this needs to be stored in the state machine)
   , _serverIds        :: [ServerId]
   -- latest term server has seen (initialised to 0, increases monotonically)
@@ -69,11 +68,20 @@ data ServerState a = ServerState
   -- [CANDIDATE] the number of votes received (initialised to 0, increases
   -- monotonically)
   , _votesReceived    :: Int
+  -- The state machine function. This takes commands and applies them to the
+  -- state machine via the machineM monad
+  , _apply            :: a -> machineM b
   }
 
-deriving instance (Show a) => Show (ServerState a)
-
 data Timeout = Timeout { low :: Int, high :: Int, gen :: StdGen } deriving (Show)
+
+makeLenses ''ServerState
+
+instance Show (ServerState a b m) where
+  show s = "ServerState { " ++
+    "selfId = " ++ show (s^.selfId) ++ ", " ++
+    "serverId = " ++ show (s^.serverIds) ++ ", " ++
+    "votedFor = " ++ show (s^.votedFor) ++ "}"
 
 nextTimeout :: Timeout -> Timeout
 nextTimeout t = let (_, gen') = randomR (low t, high t) (gen t)
@@ -86,10 +94,8 @@ readTimeout :: Timeout -> MonotonicCounter
 readTimeout t = MonotonicCounter (toInteger r)
   where r = fst $ randomR (low t, high t) (gen t)
 
-makeLenses ''ServerState
-
-mkServerState :: ServerId -> [ServerId] -> (Int, Int, Int) -> MonotonicCounter -> a -> ServerState a
-mkServerState self others (electLow, electHigh, electSeed) hbTimeout firstCommand = s
+mkServerState :: ServerId -> [ServerId] -> (Int, Int, Int) -> MonotonicCounter -> a -> (a -> m b) -> ServerState a b m
+mkServerState self others (electLow, electHigh, electSeed) hbTimeout firstCommand apply = s
   where s = ServerState { _selfId = self
                         , _serverIds = others
                         , _serverTerm = 0
@@ -104,6 +110,8 @@ mkServerState self others (electLow, electHigh, electSeed) hbTimeout firstComman
                         , _role = Follower
                         , _nextIndex = initialMap
                         , _matchIndex = initialMap
-                        , _votesReceived = 0 }
+                        , _votesReceived = 0
+                        , _apply = apply
+                        }
         emptyLog = [LogEntry { _Index = 0, _Term = 0, _Command = firstCommand, _RequestId = 0 }]
         initialMap = foldl' (\m sid -> Map.insert sid 0 m) Map.empty others
