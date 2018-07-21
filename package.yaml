@@ -88,3 +88,4 @@ tests:
     dependencies:
     - raft
     - hspec
+    - unordered-containers

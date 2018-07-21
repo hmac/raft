@@ -305,13 +305,17 @@ convertToLeader = do
 
   -- When a leader first comes to power, it initializes all nextIndex values
   -- to the index just after the last one in its log.
+  -- Initialize all matchIndex values to 0
   latestLogIndex <- (^.index) . last <$> use entryLog
   sids <- use serverIds
   nextIndex .= mkNextIndex latestLogIndex sids
+  matchIndex .= mkMatchIndex sids
 
   sendHeartbeats
   where mkNextIndex :: LogIndex -> [ServerId] -> Map.HashMap ServerId LogIndex
         mkNextIndex logIndex = foldl (\m sid -> Map.insert sid (logIndex + 1) m) Map.empty
+        mkMatchIndex :: [ServerId] -> Map.HashMap ServerId LogIndex
+        mkMatchIndex = foldl (\m sid -> Map.insert sid 0 m) Map.empty
 
 sendHeartbeats :: MonadLogger m => ServerT a b m ()
 sendHeartbeats = do

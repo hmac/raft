@@ -2,6 +2,7 @@ import           Control.Lens
 import           Control.Monad.Logger
 import           Control.Monad.State.Strict
 
+import qualified Data.HashMap.Strict        as Map
 import           Raft
 import           Raft.Log
 import           Raft.Rpc
@@ -35,26 +36,28 @@ main = hspec $ do
   testHeartbeatTimeout
   testAppendEntries
   testRequestVote
+  testRequestVoteResponse
+  testAppendEntriesResponse
 
 mkLogEntry :: LogIndex -> Term -> LogEntry Command
 mkLogEntry i t = LogEntry { _Index = i, _Term = t, _Command = NoOp, _RequestId = 0 }
 
-mkServerState :: ServerId -> [ServerId] -> (Int, Int, Int) -> MonotonicCounter -> ServerState Command () StateMachineM
+mkServerState :: ServerId -> [ServerId] -> Int -> MonotonicCounter -> ServerState Command () StateMachineM
 mkServerState self others electionTimeout heartbeatTimeout =
-  Raft.Server.mkServerState self others electionTimeout heartbeatTimeout NoOp apply
+  Raft.Server.mkServerState self others (electionTimeout, electionTimeout, 0) heartbeatTimeout NoOp apply
 
 testElectionTimeout :: Spec
 testElectionTimeout = do
   let mkNode timeout = mkServerState 0 [1] timeout 10
   context "when a node has not reached its election timeout" $
     it "doesn't call an election" $ do
-      let timeout = (2, 2, 0)
-      case sendMsg (mkNode timeout) (Tick 0) of
+      let timeout = 2
+      case sendMsg (mkNode 2) (Tick 0) of
         (msgs, _) -> msgs `shouldBe` []
   context "when a node reaches its election timeout" $
     it "calls an election" $ do
-      let timeout = (1, 1, 0)
-          (msgs, _) = sendMsg (mkNode timeout) (Tick 0)
+      let timeout = 1
+          (msgs, node') = sendMsg (mkNode timeout) (Tick 0)
       case msgs of
         [RequestVoteReq from to rpc] -> do
           from `shouldBe` 0
@@ -64,10 +67,15 @@ testElectionTimeout = do
           rpc ^. lastLogIndex `shouldBe` 0
           rpc ^. lastLogTerm `shouldBe` 0
         _ -> error "unexpected response"
+      node'^.serverTerm `shouldBe` 1
+      node'^.role `shouldBe` Candidate
+      node'^.votedFor `shouldBe` Just 0
+      node'^.votesReceived `shouldBe` 1
+      node'^.electionTimer `shouldBe` 0
 
 testHeartbeatTimeout :: Spec
 testHeartbeatTimeout = do
-  let mkNode timeout = mkServerState 0 [1] (10, 10, 0) timeout
+  let mkNode timeout = mkServerState 0 [1] 10 timeout
   context "when a node is not a leader" $
     it "does not send heartbeats" $ do
       let node = (mkNode 1) { _role = Follower }
@@ -94,7 +102,7 @@ testHeartbeatTimeout = do
 
 testAppendEntries :: Spec
 testAppendEntries = do
-  let mkNode = mkServerState 0 [1] (10, 10, 0) 10
+  let mkNode = mkServerState 0 [1] 10 10
   context "when the message's term is less than the node's term" $ do
     let node = mkNode { _serverTerm = 2 }
         appendEntriesPayload = AppendEntries { _LeaderTerm = 1
@@ -200,12 +208,30 @@ testAppendEntries = do
           msgs `shouldBe` [AppendEntriesRes 0 1 (1, True)]
           node'^.commitIndex `shouldBe` 0
 
+testAppendEntriesResponse :: Spec
+testAppendEntriesResponse = do
+  let (_, node_) = sendMsg (mkServerState 0 [1] 0 10) (Tick 0) -- trigger election
+  let (_, node) = sendMsg node_ (RequestVoteRes 1 0 (0, True)) -- grant vote
+  context "intially" $ do
+    it "should be leader" $ do
+      node^.role `shouldBe` Leader
+    it "should have nextIndex set to last log index + 1" $ do
+      node^.nextIndex `shouldBe` Map.fromList [(1, 1)]
+  context "if successful" $ do
+    let (msgs, node') = sendMsg node (AppendEntriesRes 1 0 (0, True))
+    it "sends no RPCs in response" $
+      msgs `shouldBe` []
+    it "updates nextIndex" $ do
+      node^.nextIndex `shouldBe` Map.fromList [(1, 2)]
+
+
+
 -- TODO: test case where there are 3 nodes, but log is only committed on leader
 -- + 1 node. Leader should NOT apply log to statemachine
 
 testRequestVote :: Spec
 testRequestVote = do
-  let mkNode = mkServerState 0 [1] (10, 10, 0) 10
+  let mkNode = mkServerState 0 [1] 10 10
       req cTerm lTerm lIndex = RequestVoteReq 1 0 RequestVote { _CandidateTerm = cTerm
                                                               , _CandidateId = 1
                                                               , _LastLogIndex = lIndex
@@ -254,3 +280,36 @@ testRequestVote = do
     it "does not grant vote but still updates term" $
       case sendMsg node (req 1 0 0) of
         (msgs, _) -> msgs `shouldBe` [RequestVoteRes 0 1 (1, False)]
+
+testRequestVoteResponse :: Spec
+testRequestVoteResponse = do
+  let (_, node) = sendMsg (mkServerState 0 [1, 2] 0 10) (Tick 0)
+
+  -- this just ensures that the followup tests assume the correct initial state
+  context "for a server that has converted to candidate" $
+    it "should have voted for itself" $ do
+      node^.votedFor `shouldBe` Just 0
+      node^.votesReceived `shouldBe` 1
+      node^.role `shouldBe` Candidate
+
+  context "when vote has been granted" $ do
+    let msg = RequestVoteRes 1 0 (1, True)
+        (msgs, node') = sendMsg node msg
+    it "increments votesReceived" $ do
+      node'^.votesReceived `shouldBe` 2
+
+    context "if vote grant results in a majority" $ do
+      let (_, node) = sendMsg (mkServerState 0 [1] 0 10) (Tick 0)
+          (msgs, node') = sendMsg node msg
+      it "converts to leader" $ do
+        node'^.role `shouldBe` Leader
+        node'^.electionTimer `shouldBe` 0
+        node'^.nextIndex `shouldBe` Map.fromList [(1, 1)]
+
+      it "sends AppendEntries RPCs to all other servers" $
+        msgs `shouldBe` [AppendEntriesReq 0 1 AppendEntries { _LeaderTerm = 1
+                                                            , _LeaderId = 0
+                                                            , _PrevLogIndex = 0
+                                                            , _PrevLogTerm = 0
+                                                            , _Entries = []
+                                                            , _LeaderCommit = 0 }]
