@@ -50,7 +50,7 @@ executables:
     - network-transport
     - network-transport-tcp
     - bytestring
-  raft-http:
+  http:
     main:               Main.hs
     source-dirs:        app/http
     ghc-options:
