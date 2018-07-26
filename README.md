@@ -19,34 +19,35 @@ passing it a `Message` via `handleMessage`.
 The `Message` type is as follows
 ```haskell
 data Message a b =
-    AppendEntriesReq ServerId ServerId (AppendEntries a)
-  | AppendEntriesRes ServerId ServerId (Term, Bool)
-  | RequestVoteReq ServerId ServerId (RequestVote a)
-  | RequestVoteRes ServerId ServerId (Term, Bool)
-  | Tick ServerId
-  | ClientRequest ServerId RequestId a
-  | ClientResponse ServerId RequestId (Either T.Text b)
+  AEReq (AppendEntriesReq a)
+    | AERes AppendEntriesRes
+    | RVReq RequestVoteReq
+    | RVRes RequestVoteRes
+    | CReq (ClientReq a)
+    | CRes (ClientRes b)
+    | Tick
 ```
 
 That is, an ADT with a variant for each RPC request and response, client
-requests and responses (e.g. read this value, write this value) and a final
-variant called `Tick`, which represents a change in time. Because the
-implementation is entirely pure, the evolution of time must be communicated to
-the node via a message. This makes it possible to test all sorts of different
-time-based scenarios, such as slow clocks, out of sync clocks, network latency,
-etc.
+requests and responses and a final variant called `Tick`, which represents a
+change in time. Because the implementation is entirely pure, the evolution of
+time must be communicated to the node via a message. This makes it possible to
+test all sorts of different time-based scenarios, such as slow clocks, out of
+sync clocks, network latency, etc.
+
+`Message` is parameterised over two types `a` and `b` representing the type of
+state machine commands and return values, respectively.
 
 ## Implemented features
 - A working implementation of the core algorithm (log replication and leader
   election).
-- Unit tests for the behaviour of nodes in response to the two RPC calls.
+- Unit tests for all node behaviours and the `AppendEntries` and `RequestVote`
+  RPC calls.
 - A basic integration test of a three-node cluster, with simulated clocks.
 - A prototype implementation over HTTP
   - Clients can send read/write requests and receive responses
 
 ## Planned features
-- Unit tests for all node behaviours (the "Rules for Servers" section on page 4
-  of the Raft paper).
 - Full support for client requests
   - Request redirection from non-leaders to leader
   - Full support for the client RPCs described in the Raft thesis

@@ -31,14 +31,15 @@ import           Raft.Server
 (!!) :: [a] -> Int -> a
 (!!) = Safe.at
 
-data Message a b = AEReq (AppendEntriesReq a)
-                 | AERes AppendEntriesRes
-                 | RVReq RequestVoteReq
-                 | RVRes RequestVoteRes
-                 | CReq (ClientReq a)
-                 | CRes (ClientRes b)
-                 | Tick
-                 deriving (Generic)
+data Message a b =
+  AEReq (AppendEntriesReq a)
+    | AERes AppendEntriesRes
+    | RVReq RequestVoteReq
+    | RVRes RequestVoteRes
+    | CReq (ClientReq a)
+    | CRes (ClientRes b)
+    | Tick
+    deriving (Generic)
 
 deriving instance (Typeable a, Typeable b) => Typeable (Message a b)
 instance (Binary a, Binary b) => Binary (Message a b)
