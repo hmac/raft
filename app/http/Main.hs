@@ -81,7 +81,7 @@ instance RaftMessage (Rpc.ClientReq Command) where
   fromRaftMessage (Raft.CReq r) = Just r
   fromRaftMessage _             = Nothing
 
-instance RaftMessage (Rpc.ClientResponse CommandResponse) where
+instance RaftMessage (Rpc.ClientRes CommandResponse) where
   toRaftMessage = Raft.CRes
   fromRaftMessage (Raft.CRes r) = Just r
   fromRaftMessage _             = Nothing
@@ -105,15 +105,15 @@ instance ToJSON Rpc.RequestVoteRes
 instance FromJSON Rpc.RequestVoteRes
 instance ToJSON a => ToJSON (Rpc.ClientReq a)
 instance FromJSON a => FromJSON (Rpc.ClientReq a)
-instance ToJSON b => ToJSON (Rpc.ClientResponse b)
-instance FromJSON b => FromJSON (Rpc.ClientResponse b)
+instance ToJSON b => ToJSON (Rpc.ClientRes b)
+instance FromJSON b => FromJSON (Rpc.ClientRes b)
 
 -- Our API
 type RaftAPI = "AppendEntriesRequest" :> ReqBody '[JSON] (Rpc.AppendEntriesReq Command) :> Post '[JSON] ()
           :<|> "AppendEntriesRes" :> ReqBody '[JSON] Rpc.AppendEntriesRes :> Post '[JSON] ()
           :<|> "RequestVoteRequest" :> ReqBody '[JSON] Rpc.RequestVoteReq :> Post '[JSON] ()
           :<|> "RequestVoteRes" :> ReqBody '[JSON] Rpc.RequestVoteRes :> Post '[JSON] ()
-          :<|> "Client" :> ReqBody '[JSON] (Rpc.ClientReq Command) :> Post '[JSON] (Rpc.ClientResponse CommandResponse)
+          :<|> "Client" :> ReqBody '[JSON] (Rpc.ClientReq Command) :> Post '[JSON] (Rpc.ClientRes CommandResponse)
 
 -- A server for our API
 server :: Config -> Server RaftAPI
@@ -127,7 +127,7 @@ server config =
 serveGeneric :: RaftMessage a => Config -> a -> Handler ()
 serveGeneric config req = liftIO $ runLogger $ S.processMessage config (toRaftMessage req)
 
-serveClientRequest :: Config -> Rpc.ClientReq Command -> Handler (Rpc.ClientResponse CommandResponse)
+serveClientRequest :: Config -> Rpc.ClientReq Command -> Handler (Rpc.ClientRes CommandResponse)
 serveClientRequest config req = liftIO $ runLogger $ do
   let reqId = req^.clientRequestId
       reqMapVar = S.requests config
@@ -156,7 +156,7 @@ sendAppendEntriesReq :: Rpc.AppendEntriesReq Command -> ClientM ()
 sendAppendEntriesRes :: Rpc.AppendEntriesRes -> ClientM ()
 sendRequestVoteReq :: Rpc.RequestVoteReq -> ClientM ()
 sendRequestVoteRes :: Rpc.RequestVoteRes -> ClientM ()
-sendClientRequest :: Rpc.ClientReq Command -> ClientM (Rpc.ClientResponse CommandResponse)
+sendClientRequest :: Rpc.ClientReq Command -> ClientM (Rpc.ClientRes CommandResponse)
 (sendAppendEntriesReq :<|> sendAppendEntriesRes :<|> sendRequestVoteReq :<|> sendRequestVoteRes :<|> sendClientRequest) =
   client raftAPI
 

@@ -11,7 +11,7 @@ module Raft.Rpc (
 , RequestVoteReq(..)
 , RequestVoteRes(..)
 , ClientReq(..)
-, ClientResponse(..))
+, ClientRes(..))
 where
 
 import           Control.Lens
@@ -94,12 +94,11 @@ instance Binary a => Binary (ClientReq a)
 deriving instance (Show a) => Show (ClientReq a)
 deriving instance (Eq a) => Eq (ClientReq a)
 
--- TODO: rename to ClientRes
-data ClientResponse b = ClientResponse
+data ClientRes b = ClientRes
   { _responsePayload :: Either T.Text b
   , _responseId      :: RequestId
   } deriving (Generic)
 
-instance Binary b => Binary (ClientResponse b)
-deriving instance (Show b) => Show (ClientResponse b)
-deriving instance (Eq b) => Eq (ClientResponse b)
+instance Binary b => Binary (ClientRes b)
+deriving instance (Show b) => Show (ClientRes b)
+deriving instance (Eq b) => Eq (ClientRes b)

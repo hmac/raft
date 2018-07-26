@@ -16,7 +16,7 @@ makeFields ''AppendEntriesRes
 makeFields ''RequestVoteReq
 makeFieldsNoPrefix ''RequestVoteRes
 makeFieldsNoPrefix ''ClientReq
-makeFieldsNoPrefix ''ClientResponse
+makeFieldsNoPrefix ''ClientRes
 
 makeFields ''LogEntry
 makeLenses ''ServerState

@@ -35,7 +35,7 @@ data Message a b = AEReq (AppendEntriesReq a)
                  | RVReq RequestVoteReq
                  | RVRes RequestVoteRes
                  | CReq (ClientReq a)
-                 | CRes (ClientResponse b)
+                 | CRes (ClientRes b)
                  | Tick
                  deriving (Generic)
 
@@ -180,9 +180,9 @@ handleClientRequest r = do
       pure ()
     (_, Nothing) -> do
       logInfoN "received client request but unable to identify leader: failing request"
-      tell [CRes ClientResponse { _responsePayload = Left "invalid request: node is not leader"
-                                , _responseId = reqId
-                                } ]
+      tell [CRes ClientRes { _responsePayload = Left "invalid request: node is not leader"
+                           , _responseId = reqId
+                           } ]
       pure ()
 
 -- reply false if term < currentTerm
@@ -403,9 +403,9 @@ applyCommittedLogEntries = do
     let entry = fromJust $ findByIndex log lastApplied'
     logInfoN (T.pack $ "applying entry " ++ show (entry^.index))
     res <- (lift . lift) $ apply (entry^.command)
-    tell [CRes ClientResponse { _responsePayload = Right res
-                              , _responseId = entry^.requestId
-                              }]
+    tell [CRes ClientRes { _responsePayload = Right res
+                         , _responseId = entry^.requestId
+                         }]
 
 mkAppendEntries :: ServerState a b m -> ServerId -> LogEntry a -> [LogEntry a] -> AppendEntriesReq a
 mkAppendEntries s to prevEntry newEntries =
