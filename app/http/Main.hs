@@ -210,6 +210,7 @@ sendRpc rpc env config =
       let rpc = sendAppendEntriesReq r
       res <- run rpc env
       case res of
+        Left err -> pure ()
         -- Left err -> logDebugN "Error sending AppendEntriesReq RPC"
         Right () -> pure ()
     Raft.RVRes r -> do
