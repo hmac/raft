@@ -9,7 +9,7 @@ module Raft.Rpc (
   AppendEntriesReq(..)
 , AppendEntriesRes(..)
 , RequestVoteReq(..)
-, RequestVoteResponse(..)
+, RequestVoteRes(..)
 , ClientReq(..)
 , ClientResponse(..))
 where
@@ -72,8 +72,7 @@ data RequestVoteReq = RequestVoteReq
 
 instance Binary RequestVoteReq
 
--- TODO: rename to RequestVoteRes
-data RequestVoteResponse = RequestVoteResponse
+data RequestVoteRes = RequestVoteRes
   -- ID of sender
   { _from               :: ServerId
   -- ID of receiver
@@ -84,7 +83,7 @@ data RequestVoteResponse = RequestVoteResponse
   , _requestVoteSuccess :: Bool
   } deriving (Generic, Eq, Show)
 
-instance Binary RequestVoteResponse
+instance Binary RequestVoteRes
 
 data ClientReq a = ClientReq
   { _requestPayload  :: a

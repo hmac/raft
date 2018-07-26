@@ -37,7 +37,7 @@ main = hspec $ do
   testHeartbeatTimeout
   testAppendEntriesReq
   testRequestVoteReq
-  testRequestVoteResponse
+  testRequestVoteRes
   testAppendEntriesRes
 
 mkLogEntry :: LogIndex -> Term -> LogEntry Command
@@ -264,7 +264,7 @@ testAppendEntriesReq = do
 testAppendEntriesRes :: Spec
 testAppendEntriesRes = do
   let (_, node_) = sendMsg (mkServerState 0 [1] 0 10) Tick -- trigger election
-  let (_, node) = sendMsg node_ (RVRes RequestVoteResponse { _from = 1
+  let (_, node) = sendMsg node_ (RVRes RequestVoteRes { _from = 1
                                                            , _to = 0
                                                            , _voterTerm = 0
                                                            , _requestVoteSuccess = True
@@ -368,8 +368,8 @@ testRequestVoteReq = do
       rpc^.voterTerm `shouldBe` 1
       rpc^.requestVoteSuccess `shouldBe` False
 
-testRequestVoteResponse :: Spec
-testRequestVoteResponse = do
+testRequestVoteRes :: Spec
+testRequestVoteRes = do
   let (_, node) = sendMsg (mkServerState 0 [1, 2] 0 10) Tick
 
   -- this just ensures that the followup tests assume the correct initial state
@@ -380,7 +380,7 @@ testRequestVoteResponse = do
       node^.role `shouldBe` Candidate
 
   context "when vote has been granted" $ do
-    let msg = RVRes RequestVoteResponse { _from = 1
+    let msg = RVRes RequestVoteRes { _from = 1
                                         , _to = 0
                                         , _voterTerm = 1
                                         , _requestVoteSuccess = True

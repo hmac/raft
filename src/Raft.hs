@@ -33,7 +33,7 @@ import           Raft.Server
 data Message a b = AEReq (AppendEntriesReq a)
                  | AERes AppendEntriesRes
                  | RVReq RequestVoteReq
-                 | RVRes RequestVoteResponse
+                 | RVRes RequestVoteRes
                  | CReq (ClientReq a)
                  | CRes (ClientResponse b)
                  | Tick
@@ -129,13 +129,13 @@ handleRequestVoteReq from to r = do
   voteGranted <- handleRequestVote r
   updatedTerm <- use serverTerm
   logInfoN (T.pack $ "Sending RequestVoteRes from " ++ show from ++ " to " ++ show to)
-  tell [RVRes RequestVoteResponse { _from = to
+  tell [RVRes RequestVoteRes { _from = to
                                   , _to = from
                                   , _voterTerm = updatedTerm
                                   , _requestVoteSuccess = voteGranted
                                   } ]
 
-handleRequestVoteRes :: MonadLogger m => ServerId -> ServerId -> RequestVoteResponse -> ServerT a b m ()
+handleRequestVoteRes :: MonadLogger m => ServerId -> ServerId -> RequestVoteRes -> ServerT a b m ()
 handleRequestVoteRes from to r = do
   let voteGranted = r^.requestVoteSuccess
   isCandidate <- (== Candidate) <$> use role

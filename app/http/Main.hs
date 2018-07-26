@@ -71,7 +71,7 @@ instance RaftMessage Rpc.RequestVoteReq where
   fromRaftMessage (Raft.RVReq r) = Just r
   fromRaftMessage _              = Nothing
 
-instance RaftMessage Rpc.RequestVoteResponse where
+instance RaftMessage Rpc.RequestVoteRes where
   toRaftMessage = Raft.RVRes
   fromRaftMessage (Raft.RVRes r) = Just r
   fromRaftMessage _              = Nothing
@@ -101,8 +101,8 @@ instance ToJSON Rpc.AppendEntriesRes
 instance FromJSON Rpc.AppendEntriesRes
 instance ToJSON Rpc.RequestVoteReq
 instance FromJSON Rpc.RequestVoteReq
-instance ToJSON Rpc.RequestVoteResponse
-instance FromJSON Rpc.RequestVoteResponse
+instance ToJSON Rpc.RequestVoteRes
+instance FromJSON Rpc.RequestVoteRes
 instance ToJSON a => ToJSON (Rpc.ClientReq a)
 instance FromJSON a => FromJSON (Rpc.ClientReq a)
 instance ToJSON b => ToJSON (Rpc.ClientResponse b)
@@ -112,7 +112,7 @@ instance FromJSON b => FromJSON (Rpc.ClientResponse b)
 type RaftAPI = "AppendEntriesRequest" :> ReqBody '[JSON] (Rpc.AppendEntriesReq Command) :> Post '[JSON] ()
           :<|> "AppendEntriesRes" :> ReqBody '[JSON] Rpc.AppendEntriesRes :> Post '[JSON] ()
           :<|> "RequestVoteRequest" :> ReqBody '[JSON] Rpc.RequestVoteReq :> Post '[JSON] ()
-          :<|> "RequestVoteResponse" :> ReqBody '[JSON] Rpc.RequestVoteResponse :> Post '[JSON] ()
+          :<|> "RequestVoteRes" :> ReqBody '[JSON] Rpc.RequestVoteRes :> Post '[JSON] ()
           :<|> "Client" :> ReqBody '[JSON] (Rpc.ClientReq Command) :> Post '[JSON] (Rpc.ClientResponse CommandResponse)
 
 -- A server for our API
@@ -155,7 +155,7 @@ app config = serve raftAPI (server config)
 sendAppendEntriesReq :: Rpc.AppendEntriesReq Command -> ClientM ()
 sendAppendEntriesRes :: Rpc.AppendEntriesRes -> ClientM ()
 sendRequestVoteReq :: Rpc.RequestVoteReq -> ClientM ()
-sendRequestVoteRes :: Rpc.RequestVoteResponse -> ClientM ()
+sendRequestVoteRes :: Rpc.RequestVoteRes -> ClientM ()
 sendClientRequest :: Rpc.ClientReq Command -> ClientM (Rpc.ClientResponse CommandResponse)
 (sendAppendEntriesReq :<|> sendAppendEntriesRes :<|> sendRequestVoteReq :<|> sendRequestVoteRes :<|> sendClientRequest) =
   client raftAPI
