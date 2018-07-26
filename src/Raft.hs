@@ -30,7 +30,7 @@ import           Raft.Server
 (!!) :: [a] -> Int -> a
 (!!) = Safe.at
 
-data Message a b = AEReq (AppendEntries a)
+data Message a b = AEReq (AppendEntriesReq a)
                  | AERes AppendEntriesResponse
                  | RVReq (RequestVote a)
                  | RVRes RequestVoteResponse
@@ -68,7 +68,7 @@ handleMessage m = snd <$> runWriterT go
 
 handleTick :: MonadLogger m => ServerT a b m ()
 handleTick = do
-  -- if election timeout elapses without receiving AppendEntries RPC from current
+  -- if election timeout elapses without receiving AppendEntriesReq RPC from current
   -- leader or granting vote to candidate, convert to candidate
   applyCommittedLogEntries
   electionTimer' <- electionTimer <+= 1
@@ -79,7 +79,7 @@ handleTick = do
   when (electionTimer' >= electTimeout && role /= Leader) convertToCandidate
   when (heartbeatTimer' >= hbTimeout && role == Leader) sendHeartbeats
 
-handleAppendEntriesReq :: MonadLogger m => ServerId -> ServerId -> AppendEntries a -> ServerT a b m ()
+handleAppendEntriesReq :: MonadLogger m => ServerId -> ServerId -> AppendEntriesReq a -> ServerT a b m ()
 handleAppendEntriesReq from to r = do
   checkForNewTerm (r^.leaderTerm)
   success <- handleAppendEntries r
@@ -191,7 +191,7 @@ handleClientRequest r = do
 -- append entries to the log
 -- if leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of
 --   last new entry)
-handleAppendEntries :: MonadLogger m => AppendEntries a -> ServerT a b m Bool
+handleAppendEntries :: MonadLogger m => AppendEntriesReq a -> ServerT a b m Bool
 handleAppendEntries r = do
   log <- use entryLog
   currentCommitIndex <- use commitIndex
@@ -208,7 +208,7 @@ handleAppendEntries r = do
       pure True
 
 -- TODO: this is a crap return type - improve it
-validateAppendEntries :: Term -> Log a -> AppendEntries a -> (Bool, T.Text)
+validateAppendEntries :: Term -> Log a -> AppendEntriesReq a -> (Bool, T.Text)
 validateAppendEntries currentTerm log rpc =
   if rpc^.leaderTerm < currentTerm
      then (False, "AppendEntries denied: term < currentTerm")
@@ -344,14 +344,9 @@ sendHeartbeats = do
   selfId <- use selfId
   commitIndex <- use commitIndex
   log <- use entryLog
+  state <- get
   let lastEntry = last log
-      mkHeartbeat to = AEReq AppendEntries { _appendEntriesLeaderTerm = currentTerm
-                                           , _appendEntriesFrom = selfId
-                                           , _appendEntriesTo = to
-                                           , _appendEntriesPrevLogIndex = lastEntry ^. index
-                                           , _appendEntriesPrevLogTerm = lastEntry ^. term
-                                           , _appendEntriesEntries = []
-                                           , _appendEntriesLeaderCommit = commitIndex }
+      mkHeartbeat to = AEReq $ mkAppendEntries state to lastEntry []
   tell $ map mkHeartbeat servers
   heartbeatTimer .= 0
 
@@ -361,15 +356,10 @@ sendAppendEntries followerId logIndex = do
   selfId <- use selfId
   log <- use entryLog
   commitIndex <- use commitIndex
+  state <- get
   let entry = log !! fromInteger logIndex
       prevEntry = log !! fromInteger (logIndex - 1)
-      req = AEReq AppendEntries { _appendEntriesLeaderTerm = currentTerm
-                               , _appendEntriesFrom = selfId
-                               , _appendEntriesTo = followerId
-                               , _appendEntriesPrevLogIndex = prevEntry ^. index
-                               , _appendEntriesPrevLogTerm = prevEntry ^. term
-                               , _appendEntriesEntries = [entry]
-                               , _appendEntriesLeaderCommit = commitIndex }
+      req = AEReq $ mkAppendEntries state followerId prevEntry [entry]
   tell [req]
   heartbeatTimer .= 0
 
@@ -416,3 +406,14 @@ applyCommittedLogEntries = do
     tell [CRes ClientResponse { _responsePayload = Right res
                               , _responseId = entry^.requestId
                               }]
+
+mkAppendEntries :: ServerState a b m -> ServerId -> LogEntry a -> [LogEntry a] -> AppendEntriesReq a
+mkAppendEntries s to prevEntry newEntries =
+  AppendEntriesReq { _appendEntriesReqFrom = s^.selfId
+                   , _appendEntriesReqTo = to
+                   , _appendEntriesReqLeaderTerm = s^.serverTerm
+                   , _appendEntriesReqPrevLogIndex = prevEntry^.index
+                   , _appendEntriesReqPrevLogTerm = prevEntry^.term
+                   , _appendEntriesReqEntries = newEntries
+                   , _appendEntriesReqLeaderCommit = s^.commitIndex
+                   }

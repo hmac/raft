@@ -1,13 +1,18 @@
-{-# LANGUAGE DeriveGeneric          #-}
-{-# LANGUAGE DuplicateRecordFields  #-}
-{-# LANGUAGE FlexibleInstances      #-}
-{-# LANGUAGE FunctionalDependencies #-}
-{-# LANGUAGE MultiParamTypeClasses  #-}
-{-# LANGUAGE StandaloneDeriving     #-}
-{-# LANGUAGE TemplateHaskell        #-}
-{-# LANGUAGE TypeSynonymInstances   #-}
+{-# LANGUAGE DeriveGeneric         #-}
+{-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE FlexibleInstances     #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE StandaloneDeriving    #-}
+{-# LANGUAGE TypeSynonymInstances  #-}
 
-module Raft.Rpc where
+module Raft.Rpc (
+  AppendEntriesReq(..)
+, AppendEntriesResponse(..)
+, RequestVote(..)
+, RequestVoteResponse(..)
+, ClientReq(..)
+, ClientResponse(..))
+where
 
 import           Control.Lens
 import           Data.Binary  (Binary)
@@ -16,27 +21,26 @@ import           GHC.Generics (Generic)
 import           Raft.Log
 import           Raft.Server
 
--- TODO: rename to AppendEntriesReq
-data AppendEntries a = AppendEntries
+data AppendEntriesReq a = AppendEntriesReq
   -- ID of sender
-  { _appendEntriesFrom         :: ServerId
+  { _appendEntriesReqFrom         :: ServerId
   -- ID of receiver
-  , _appendEntriesTo           :: ServerId
+  , _appendEntriesReqTo           :: ServerId
   -- leader's term
-  , _appendEntriesLeaderTerm   :: Term
+  , _appendEntriesReqLeaderTerm   :: Term
   -- index of log entry immediately preceding new ones
-  , _appendEntriesPrevLogIndex :: LogIndex
+  , _appendEntriesReqPrevLogIndex :: LogIndex
   -- term of prevLogIndex entry
-  , _appendEntriesPrevLogTerm  :: Term
+  , _appendEntriesReqPrevLogTerm  :: Term
   -- log entries to store (empty for heartbeat)
-  , _appendEntriesEntries      :: [LogEntry a]
+  , _appendEntriesReqEntries      :: [LogEntry a]
   -- leader's commitIndex
-  , _appendEntriesLeaderCommit :: LogIndex
+  , _appendEntriesReqLeaderCommit :: LogIndex
   } deriving (Generic)
 
-instance Binary a => Binary (AppendEntries a)
-deriving instance (Show a) => Show (AppendEntries a)
-deriving instance (Eq a) => Eq (AppendEntries a)
+instance Binary a => Binary (AppendEntriesReq a)
+deriving instance (Show a) => Show (AppendEntriesReq a)
+deriving instance (Eq a) => Eq (AppendEntriesReq a)
 
 -- TODO: rename to AppendEntriesRes
 data AppendEntriesResponse = AppendEntriesResponse

@@ -56,7 +56,7 @@ class (RaftMessage a) where
   toRaftMessage :: a -> Message
   fromRaftMessage :: Message -> Maybe a
 
-instance RaftMessage (Rpc.AppendEntries Command) where
+instance RaftMessage (Rpc.AppendEntriesReq Command) where
   toRaftMessage = Raft.AEReq
   fromRaftMessage (Raft.AEReq r) = Just r
   fromRaftMessage _              = Nothing
@@ -95,8 +95,8 @@ instance ToJSON RequestId
 instance FromJSON RequestId
 instance ToJSON a => ToJSON (LogEntry a)
 instance FromJSON a => FromJSON (LogEntry a)
-instance ToJSON a => ToJSON (Rpc.AppendEntries a)
-instance FromJSON a => FromJSON (Rpc.AppendEntries a)
+instance ToJSON a => ToJSON (Rpc.AppendEntriesReq a)
+instance FromJSON a => FromJSON (Rpc.AppendEntriesReq a)
 instance ToJSON Rpc.AppendEntriesResponse
 instance FromJSON Rpc.AppendEntriesResponse
 instance ToJSON a => ToJSON (Rpc.RequestVote a)
@@ -109,7 +109,7 @@ instance ToJSON b => ToJSON (Rpc.ClientResponse b)
 instance FromJSON b => FromJSON (Rpc.ClientResponse b)
 
 -- Our API
-type RaftAPI = "AppendEntriesRequest" :> ReqBody '[JSON] (Rpc.AppendEntries Command) :> Post '[JSON] ()
+type RaftAPI = "AppendEntriesRequest" :> ReqBody '[JSON] (Rpc.AppendEntriesReq Command) :> Post '[JSON] ()
           :<|> "AppendEntriesResponse" :> ReqBody '[JSON] Rpc.AppendEntriesResponse :> Post '[JSON] ()
           :<|> "RequestVoteRequest" :> ReqBody '[JSON] (Rpc.RequestVote Command) :> Post '[JSON] ()
           :<|> "RequestVoteResponse" :> ReqBody '[JSON] Rpc.RequestVoteResponse :> Post '[JSON] ()
@@ -152,7 +152,7 @@ app :: Config -> Application
 app config = serve raftAPI (server config)
 
 -- A client for our API
-sendAppendEntriesReq :: Rpc.AppendEntries Command -> ClientM ()
+sendAppendEntriesReq :: Rpc.AppendEntriesReq Command -> ClientM ()
 sendAppendEntriesRes :: Rpc.AppendEntriesResponse -> ClientM ()
 sendRequestVoteReq :: Rpc.RequestVote Command -> ClientM ()
 sendRequestVoteRes :: Rpc.RequestVoteResponse -> ClientM ()
