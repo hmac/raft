@@ -19,4 +19,4 @@ makeFieldsNoPrefix ''ClientReq
 makeFieldsNoPrefix ''ClientRes
 
 makeFieldsNoPrefix ''LogEntry
-makeLenses ''ServerState
+makeFieldsNoPrefix ''ServerState
