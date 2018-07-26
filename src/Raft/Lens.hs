@@ -11,9 +11,9 @@ import           Raft.Log
 import           Raft.Rpc
 import           Raft.Server
 
-makeFields ''AppendEntriesReq
-makeFields ''AppendEntriesRes
-makeFields ''RequestVoteReq
+makeFieldsNoPrefix ''AppendEntriesReq
+makeFieldsNoPrefix ''AppendEntriesRes
+makeFieldsNoPrefix ''RequestVoteReq
 makeFieldsNoPrefix ''RequestVoteRes
 makeFieldsNoPrefix ''ClientReq
 makeFieldsNoPrefix ''ClientRes

@@ -23,19 +23,19 @@ import           Raft.Server
 
 data AppendEntriesReq a = AppendEntriesReq
   -- ID of sender
-  { _appendEntriesReqFrom         :: ServerId
+  { _from         :: ServerId
   -- ID of receiver
-  , _appendEntriesReqTo           :: ServerId
+  , _to           :: ServerId
   -- leader's term
-  , _appendEntriesReqLeaderTerm   :: Term
+  , _leaderTerm   :: Term
   -- index of log entry immediately preceding new ones
-  , _appendEntriesReqPrevLogIndex :: LogIndex
+  , _prevLogIndex :: LogIndex
   -- term of prevLogIndex entry
-  , _appendEntriesReqPrevLogTerm  :: Term
+  , _prevLogTerm  :: Term
   -- log entries to store (empty for heartbeat)
-  , _appendEntriesReqEntries      :: [LogEntry a]
+  , _entries      :: [LogEntry a]
   -- leader's commitIndex
-  , _appendEntriesReqLeaderCommit :: LogIndex
+  , _leaderCommit :: LogIndex
   } deriving (Generic)
 
 instance Binary a => Binary (AppendEntriesReq a)
@@ -44,30 +44,30 @@ deriving instance (Eq a) => Eq (AppendEntriesReq a)
 
 data AppendEntriesRes = AppendEntriesRes
   -- ID of sender
-  { _appendEntriesResFrom     :: ServerId
+  { _from     :: ServerId
   -- ID of receiver
-  , _appendEntriesResTo       :: ServerId
+  , _to       :: ServerId
   -- the responding server's term
-  , _appendEntriesResTerm     :: Term
+  , _term     :: Term
   -- whether the AppendEntries RPC was successful
-  , _appendEntriesResSuccess  :: Bool
+  , _success  :: Bool
   -- index of the latest entry in the responding server's log
-  , _appendEntriesResLogIndex :: LogIndex
+  , _logIndex :: LogIndex
   } deriving (Generic, Eq, Show)
 
 instance Binary AppendEntriesRes
 
 data RequestVoteReq = RequestVoteReq
   -- ID of sender
-  { _requestVoteReqFrom          :: ServerId
+  { _from          :: ServerId
   -- ID of receiver
-  , _requestVoteReqTo            :: ServerId
+  , _to            :: ServerId
   -- candidate's term
-  , _requestVoteReqCandidateTerm :: Term
+  , _candidateTerm :: Term
   -- index of candidate's last log entry
-  , _requestVoteReqLastLogIndex  :: LogIndex
+  , _lastLogIndex  :: LogIndex
   -- term of candidate's last log entry
-  , _requestVoteReqLastLogTerm   :: Term
+  , _lastLogTerm   :: Term
   } deriving (Generic, Eq, Show)
 
 instance Binary RequestVoteReq

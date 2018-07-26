@@ -1,6 +1,7 @@
-{-# LANGUAGE DeriveGeneric      #-}
-{-# LANGUAGE OverloadedStrings  #-}
-{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE DeriveGeneric         #-}
+{-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE StandaloneDeriving    #-}
 
 module Raft (handleMessage, Message(..), ServerT, ExtServerT) where
 
@@ -86,11 +87,11 @@ handleAppendEntriesReq from to r = do
   electionTimer .= 0
   updatedTerm <- use serverTerm
   lastLog <- last <$> use entryLog
-  tell [AERes AppendEntriesRes { _appendEntriesResFrom = to
-                               , _appendEntriesResTo = from
-                               , _appendEntriesResTerm = updatedTerm
-                               , _appendEntriesResSuccess = success
-                               , _appendEntriesResLogIndex = lastLog^.index
+  tell [AERes AppendEntriesRes { _from = to
+                               , _to = from
+                               , _term = updatedTerm
+                               , _success = success
+                               , _logIndex = lastLog^.index
                                }]
 
 checkForNewTerm :: MonadLogger m => Term -> ServerT a b m ()
@@ -308,11 +309,11 @@ convertToCandidate = do
   votesReceived .= 1
   electionTimer .= 0
   electionTimeout %= nextTimeout
-  let rpc sid = RequestVoteReq { _requestVoteReqFrom = ownId
-                            , _requestVoteReqTo = sid
-                            , _requestVoteReqCandidateTerm = newTerm
-                            , _requestVoteReqLastLogIndex = lastLogEntry ^. index
-                            , _requestVoteReqLastLogTerm = lastLogEntry ^. term }
+  let rpc sid = RequestVoteReq { _from = ownId
+                               , _to = sid
+                               , _candidateTerm = newTerm
+                               , _lastLogIndex = lastLogEntry ^. index
+                               , _lastLogTerm = lastLogEntry ^. term }
   mapM_ (\i -> logInfoN (T.pack $ "Sending RequestVoteReq from self (" ++ show ownId ++ ") to " ++ show i)) servers
   tell $ map (RVReq . rpc) servers
 
@@ -409,11 +410,11 @@ applyCommittedLogEntries = do
 
 mkAppendEntries :: ServerState a b m -> ServerId -> LogEntry a -> [LogEntry a] -> AppendEntriesReq a
 mkAppendEntries s to prevEntry newEntries =
-  AppendEntriesReq { _appendEntriesReqFrom = s^.selfId
-                   , _appendEntriesReqTo = to
-                   , _appendEntriesReqLeaderTerm = s^.serverTerm
-                   , _appendEntriesReqPrevLogIndex = prevEntry^.index
-                   , _appendEntriesReqPrevLogTerm = prevEntry^.term
-                   , _appendEntriesReqEntries = newEntries
-                   , _appendEntriesReqLeaderCommit = s^.commitIndex
+  AppendEntriesReq { _from = s^.selfId
+                   , _to = to
+                   , _leaderTerm = s^.serverTerm
+                   , _prevLogIndex = prevEntry^.index
+                   , _prevLogTerm = prevEntry^.term
+                   , _entries = newEntries
+                   , _leaderCommit = s^.commitIndex
                    }

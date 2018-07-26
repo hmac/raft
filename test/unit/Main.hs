@@ -1,3 +1,5 @@
+{-# LANGUAGE DuplicateRecordFields #-}
+
 import           Control.Monad.Identity
 import           Control.Monad.Logger
 import           Control.Monad.State.Strict
@@ -107,13 +109,13 @@ testAppendEntriesReq = do
   let mkNode = mkServerState 0 [1] 10 10
   context "when the message's term is less than the node's term" $ do
     let node = mkNode { _serverTerm = 2 }
-        appendEntriesPayload = AppendEntriesReq { _appendEntriesReqFrom = 1
-                                             , _appendEntriesReqTo = 0
-                                             , _appendEntriesReqLeaderTerm = 1
-                                             , _appendEntriesReqPrevLogIndex = 0
-                                             , _appendEntriesReqPrevLogTerm = 0
-                                             , _appendEntriesReqEntries = []
-                                             , _appendEntriesReqLeaderCommit = 0 }
+        appendEntriesPayload = AppendEntriesReq { _from = 1
+                                                , _to = 0
+                                                , _leaderTerm = 1
+                                                , _prevLogIndex = 0
+                                                , _prevLogTerm = 0
+                                                , _entries = []
+                                                , _leaderCommit = 0 }
     let req = AEReq appendEntriesPayload
     it "replies with false" $
       case sendMsg node req of
@@ -127,13 +129,13 @@ testAppendEntriesReq = do
           rpc^.logIndex `shouldBe` 0
   context "when the log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm" $ do
     let node = mkNode
-        appendEntriesPayload = AppendEntriesReq { _appendEntriesReqLeaderTerm = 1
-                                             , _appendEntriesReqFrom = 1
-                                             , _appendEntriesReqTo = 0
-                                             , _appendEntriesReqPrevLogIndex = 0
-                                             , _appendEntriesReqPrevLogTerm = 3
-                                             , _appendEntriesReqEntries = []
-                                             , _appendEntriesReqLeaderCommit = 0 }
+        appendEntriesPayload = AppendEntriesReq { _leaderTerm = 1
+                                                , _from = 1
+                                                , _to = 0
+                                                , _prevLogIndex = 0
+                                                , _prevLogTerm = 3
+                                                , _entries = []
+                                                , _leaderCommit = 0 }
         req = AEReq appendEntriesPayload
     it "replies with false" $
       case sendMsg node req of
@@ -151,13 +153,13 @@ testAppendEntriesReq = do
         secondEntry = mkLogEntry 2 1
         thirdEntry = mkLogEntry 1 3
         mkAppendEntries prevIndex es
-          = AEReq AppendEntriesReq { _appendEntriesReqLeaderTerm = 1
-                                , _appendEntriesReqFrom = 1
-                                , _appendEntriesReqTo = 0
-                                , _appendEntriesReqPrevLogIndex = prevIndex
-                                , _appendEntriesReqPrevLogTerm = 0
-                                , _appendEntriesReqEntries = es
-                                , _appendEntriesReqLeaderCommit = 0 }
+          = AEReq AppendEntriesReq { _leaderTerm = 1
+                                   , _from = 1
+                                   , _to = 0
+                                   , _prevLogIndex = prevIndex
+                                   , _prevLogTerm = 0
+                                   , _entries = es
+                                   , _leaderCommit = 0 }
         req1 = mkAppendEntries 0 [firstEntry, secondEntry]
         req2 = mkAppendEntries 0 [thirdEntry]
     it "deletes the entry and all that follow it" $ do
@@ -176,13 +178,13 @@ testAppendEntriesReq = do
     let zerothEntry = mkLogEntry 0 0
         firstEntry = mkLogEntry 1 1
         mkAppendEntries prevIndex es
-          = AEReq AppendEntriesReq { _appendEntriesReqLeaderTerm = 1
-                                               , _appendEntriesReqFrom = 1
-                                               , _appendEntriesReqTo = 0
-                                               , _appendEntriesReqPrevLogIndex = prevIndex
-                                               , _appendEntriesReqPrevLogTerm = 0
-                                               , _appendEntriesReqEntries = es
-                                               , _appendEntriesReqLeaderCommit = 0 }
+          = AEReq AppendEntriesReq { _leaderTerm = 1
+                                   , _from = 1
+                                   , _to = 0
+                                   , _prevLogIndex = prevIndex
+                                   , _prevLogTerm = 0
+                                   , _entries = es
+                                   , _leaderCommit = 0 }
         req = mkAppendEntries 0 [firstEntry]
     it "appends it to the log" $
       case sendMsg mkNode req of
@@ -200,13 +202,13 @@ testAppendEntriesReq = do
         firstEntry = mkLogEntry 1 1
         secondEntry = mkLogEntry 2 1
     context "and leaderCommit <= index of last new entry" $ do
-      let req = AEReq AppendEntriesReq { _appendEntriesReqLeaderTerm = 1
-                                    , _appendEntriesReqFrom = 1
-                                    , _appendEntriesReqTo = 0
-                                    , _appendEntriesReqPrevLogIndex = 0
-                                    , _appendEntriesReqPrevLogTerm = 0
-                                    , _appendEntriesReqEntries = [firstEntry, secondEntry]
-                                    , _appendEntriesReqLeaderCommit = 1 }
+      let req = AEReq AppendEntriesReq { _leaderTerm = 1
+                                       , _from = 1
+                                       , _to = 0
+                                       , _prevLogIndex = 0
+                                       , _prevLogTerm = 0
+                                       , _entries = [firstEntry, secondEntry]
+                                       , _leaderCommit = 1 }
       it "sets commitIndex = leaderCommit" $
         case sendMsg mkNode req of
           (msgs, node') -> do
@@ -219,13 +221,13 @@ testAppendEntriesReq = do
             rpc^.logIndex `shouldBe` 2
             node'^.commitIndex `shouldBe` 1
     context "and leaderCommit > index of last new entry" $ do
-      let req = AEReq AppendEntriesReq { _appendEntriesReqLeaderTerm = 1
-                                    , _appendEntriesReqFrom = 1
-                                    , _appendEntriesReqTo = 0
-                                    , _appendEntriesReqPrevLogIndex = 0
-                                    , _appendEntriesReqPrevLogTerm = 0
-                                    , _appendEntriesReqEntries = [firstEntry, secondEntry]
-                                    , _appendEntriesReqLeaderCommit = 3 }
+      let req = AEReq AppendEntriesReq { _leaderTerm = 1
+                                       , _from = 1
+                                       , _to = 0
+                                       , _prevLogIndex = 0
+                                       , _prevLogTerm = 0
+                                       , _entries = [firstEntry, secondEntry]
+                                       , _leaderCommit = 3 }
       it "sets commitIndex = index of last new entry" $
         case sendMsg mkNode req of
           (msgs, node') -> do
@@ -241,13 +243,13 @@ testAppendEntriesReq = do
     let zerothEntry = mkLogEntry 0 0
         firstEntry = mkLogEntry 1 1
         secondEntry = mkLogEntry 2 1
-        req = AEReq AppendEntriesReq { _appendEntriesReqLeaderTerm = 1
-                                  , _appendEntriesReqFrom = 1
-                                  , _appendEntriesReqTo = 0
-                                  , _appendEntriesReqPrevLogIndex = 0
-                                  , _appendEntriesReqPrevLogTerm = 0
-                                  , _appendEntriesReqEntries = [firstEntry, secondEntry]
-                                  , _appendEntriesReqLeaderCommit = 0 }
+        req = AEReq AppendEntriesReq { _leaderTerm = 1
+                                     , _from = 1
+                                     , _to = 0
+                                     , _prevLogIndex = 0
+                                     , _prevLogTerm = 0
+                                     , _entries = [firstEntry, secondEntry]
+                                     , _leaderCommit = 0 }
         res = sendMsg mkNode req
     it "does not modify commitIndex" $
       case res of
@@ -265,21 +267,21 @@ testAppendEntriesRes :: Spec
 testAppendEntriesRes = do
   let (_, node_) = sendMsg (mkServerState 0 [1] 0 10) Tick -- trigger election
   let (_, node) = sendMsg node_ (RVRes RequestVoteRes { _from = 1
-                                                           , _to = 0
-                                                           , _voterTerm = 0
-                                                           , _requestVoteSuccess = True
-                                                           }) -- grant vote
+                                                      , _to = 0
+                                                      , _voterTerm = 0
+                                                      , _requestVoteSuccess = True
+                                                      }) -- grant vote
   context "intially" $ do
     it "should be leader" $ do
       node^.role `shouldBe` Leader
     it "should have nextIndex set to last log index + 1" $ do
       node^.nextIndex `shouldBe` Map.fromList [(1, 1)]
   context "if successful" $ do
-    let (msgs, node') = sendMsg node (AERes AppendEntriesRes { _appendEntriesResFrom = 1
-                                                             , _appendEntriesResTo = 0
-                                                             , _appendEntriesResTerm = 0
-                                                             , _appendEntriesResSuccess = True
-                                                             , _appendEntriesResLogIndex = 1
+    let (msgs, node') = sendMsg node (AERes AppendEntriesRes { _from = 1
+                                                             , _to = 0
+                                                             , _term = 0
+                                                             , _success = True
+                                                             , _logIndex = 1
                                                              } )
     it "sends no RPCs in response" $
       msgs `shouldBe` []
@@ -294,11 +296,11 @@ testAppendEntriesRes = do
 testRequestVoteReq :: Spec
 testRequestVoteReq = do
   let mkNode = mkServerState 0 [1] 10 10
-      req cTerm lTerm lIndex = RVReq RequestVoteReq { _requestVoteReqCandidateTerm = cTerm
-                                                 , _requestVoteReqFrom = 1
-                                                 , _requestVoteReqTo = 0
-                                                 , _requestVoteReqLastLogIndex = lIndex
-                                                 , _requestVoteReqLastLogTerm = lTerm }
+      req cTerm lTerm lIndex = RVReq RequestVoteReq { _candidateTerm = cTerm
+                                                    , _from = 1
+                                                    , _to = 0
+                                                    , _lastLogIndex = lIndex
+                                                    , _lastLogTerm = lTerm }
   context "if candidate's term < currentTerm" $ do
     let node = mkNode { _serverTerm = 2 }
     let ([RVRes rpc], _) = sendMsg node (req 1 0 0)
@@ -398,11 +400,11 @@ testRequestVoteRes = do
         node'^.nextIndex `shouldBe` Map.fromList [(1, 1)]
 
       it "sends AppendEntries RPCs to all other servers" $
-        msgs `shouldBe` [AEReq AppendEntriesReq { _appendEntriesReqLeaderTerm = 1
-                                             , _appendEntriesReqFrom = 0
-                                             , _appendEntriesReqTo = 1
-                                             , _appendEntriesReqPrevLogIndex = 0
-                                             , _appendEntriesReqPrevLogTerm = 0
-                                             , _appendEntriesReqEntries = []
-                                             , _appendEntriesReqLeaderCommit = 0
-                                             }]
+        msgs `shouldBe` [AEReq AppendEntriesReq { _leaderTerm = 1
+                                                , _from = 0
+                                                , _to = 1
+                                                , _prevLogIndex = 0
+                                                , _prevLogTerm = 0
+                                                , _entries = []
+                                                , _leaderCommit = 0
+                                                }]
