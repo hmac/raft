@@ -59,7 +59,7 @@ instance Binary AppendEntriesRes
 
 -- TODO: rename to RequestVoteReq
 -- TODO: remove type parameter - not needed?
-data RequestVote a = RequestVote
+data RequestVote = RequestVote
   -- ID of sender
   { _requestVoteFrom          :: ServerId
   -- ID of receiver
@@ -70,11 +70,9 @@ data RequestVote a = RequestVote
   , _requestVoteLastLogIndex  :: LogIndex
   -- term of candidate's last log entry
   , _requestVoteLastLogTerm   :: Term
-  } deriving (Generic)
+  } deriving (Generic, Eq, Show)
 
-instance Binary (RequestVote a)
-deriving instance (Show a) => Show (RequestVote a)
-deriving instance (Eq a) => Eq (RequestVote a)
+instance Binary RequestVote
 
 -- TODO: rename to RequestVoteRes
 data RequestVoteResponse = RequestVoteResponse

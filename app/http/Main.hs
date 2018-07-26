@@ -66,7 +66,7 @@ instance RaftMessage Rpc.AppendEntriesRes where
   fromRaftMessage (Raft.AERes r) = Just r
   fromRaftMessage _              = Nothing
 
-instance RaftMessage (Rpc.RequestVote Command) where
+instance RaftMessage Rpc.RequestVote where
   toRaftMessage = Raft.RVReq
   fromRaftMessage (Raft.RVReq r) = Just r
   fromRaftMessage _              = Nothing
@@ -99,8 +99,8 @@ instance ToJSON a => ToJSON (Rpc.AppendEntriesReq a)
 instance FromJSON a => FromJSON (Rpc.AppendEntriesReq a)
 instance ToJSON Rpc.AppendEntriesRes
 instance FromJSON Rpc.AppendEntriesRes
-instance ToJSON a => ToJSON (Rpc.RequestVote a)
-instance FromJSON a => FromJSON (Rpc.RequestVote a)
+instance ToJSON Rpc.RequestVote
+instance FromJSON Rpc.RequestVote
 instance ToJSON Rpc.RequestVoteResponse
 instance FromJSON Rpc.RequestVoteResponse
 instance ToJSON a => ToJSON (Rpc.ClientReq a)
@@ -111,7 +111,7 @@ instance FromJSON b => FromJSON (Rpc.ClientResponse b)
 -- Our API
 type RaftAPI = "AppendEntriesRequest" :> ReqBody '[JSON] (Rpc.AppendEntriesReq Command) :> Post '[JSON] ()
           :<|> "AppendEntriesRes" :> ReqBody '[JSON] Rpc.AppendEntriesRes :> Post '[JSON] ()
-          :<|> "RequestVoteRequest" :> ReqBody '[JSON] (Rpc.RequestVote Command) :> Post '[JSON] ()
+          :<|> "RequestVoteRequest" :> ReqBody '[JSON] Rpc.RequestVote :> Post '[JSON] ()
           :<|> "RequestVoteResponse" :> ReqBody '[JSON] Rpc.RequestVoteResponse :> Post '[JSON] ()
           :<|> "Client" :> ReqBody '[JSON] (Rpc.ClientReq Command) :> Post '[JSON] (Rpc.ClientResponse CommandResponse)
 
@@ -154,7 +154,7 @@ app config = serve raftAPI (server config)
 -- A client for our API
 sendAppendEntriesReq :: Rpc.AppendEntriesReq Command -> ClientM ()
 sendAppendEntriesRes :: Rpc.AppendEntriesRes -> ClientM ()
-sendRequestVoteReq :: Rpc.RequestVote Command -> ClientM ()
+sendRequestVoteReq :: Rpc.RequestVote -> ClientM ()
 sendRequestVoteRes :: Rpc.RequestVoteResponse -> ClientM ()
 sendClientRequest :: Rpc.ClientReq Command -> ClientM (Rpc.ClientResponse CommandResponse)
 (sendAppendEntriesReq :<|> sendAppendEntriesRes :<|> sendRequestVoteReq :<|> sendRequestVoteRes :<|> sendClientRequest) =

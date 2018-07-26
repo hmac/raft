@@ -32,7 +32,7 @@ import           Raft.Server
 
 data Message a b = AEReq (AppendEntriesReq a)
                  | AERes AppendEntriesRes
-                 | RVReq (RequestVote a)
+                 | RVReq RequestVote
                  | RVRes RequestVoteResponse
                  | CReq (ClientReq a)
                  | CRes (ClientResponse b)
@@ -123,7 +123,7 @@ handleAppendEntriesRes from to r = do
         unless (r^.success) (sendAppendEntries from next')
       _ -> error "expected nextIndex and matchIndex to have element!"
 
-handleRequestVoteReq :: MonadLogger m => ServerId -> ServerId -> RequestVote a -> ServerT a b m ()
+handleRequestVoteReq :: MonadLogger m => ServerId -> ServerId -> RequestVote -> ServerT a b m ()
 handleRequestVoteReq from to r = do
   logInfoN (T.pack $ "Received RequestVoteReq from " ++ show from)
   voteGranted <- handleRequestVote r
@@ -233,7 +233,7 @@ appendEntries (l:ls) (e:es) = case compare (l^.index) (e^.index) of
 -- reply false if term < currentTerm
 -- if votedFor is null or candidateId (rpc.from), and candidate's log is at least as
 --   up-to-date as receiver's log, grant vote
-handleRequestVote :: MonadLogger m => RequestVote a -> ServerT a b m Bool
+handleRequestVote :: MonadLogger m => RequestVote -> ServerT a b m Bool
 handleRequestVote r = do
   s <- get
   let currentTerm = s ^. serverTerm
