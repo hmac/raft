@@ -28,10 +28,10 @@ newtype RequestId = RequestId
   } deriving (Eq, Ord, Num, Show, Generic, Typeable, Binary, Hashable)
 
 data LogEntry a = LogEntry
-  { _logEntryIndex     :: LogIndex
-  , _logEntryTerm      :: Term
-  , _logEntryCommand   :: a
-  , _logEntryRequestId :: RequestId
+  { _index     :: LogIndex
+  , _term      :: Term
+  , _command   :: a
+  , _requestId :: RequestId
   } deriving (Generic)
 
 instance Binary a => Binary (LogEntry a)

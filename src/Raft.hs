@@ -130,11 +130,7 @@ handleRequestVoteReq from to r = do
   voteGranted <- handleRequestVote r
   updatedTerm <- use serverTerm
   logInfoN (T.pack $ "Sending RequestVoteRes from " ++ show from ++ " to " ++ show to)
-  tell [RVRes RequestVoteRes { _from = to
-                                  , _to = from
-                                  , _voterTerm = updatedTerm
-                                  , _requestVoteSuccess = voteGranted
-                                  } ]
+  tell [RVRes RequestVoteRes { _from = to , _to = from , _voterTerm = updatedTerm , _requestVoteSuccess = voteGranted }]
 
 handleRequestVoteRes :: MonadLogger m => ServerId -> ServerId -> RequestVoteRes -> ServerT a b m ()
 handleRequestVoteRes from to r = do
@@ -164,10 +160,7 @@ handleClientRequest r = do
       log <- use entryLog
       currentTerm <- use serverTerm
       let nextIndex = toInteger $ length log
-          entry = LogEntry { _logEntryIndex = nextIndex
-                           , _logEntryTerm = currentTerm
-                           , _logEntryCommand = c
-                           , _logEntryRequestId = reqId}
+          entry = LogEntry { _index = nextIndex , _term = currentTerm , _command = c , _requestId = reqId}
       entryLog %= \log -> log ++ [entry]
       -- broadcast this new entry to followers
       serverIds <- use serverIds

@@ -43,10 +43,10 @@ main = hspec $ do
   testAppendEntriesRes
 
 mkLogEntry :: LogIndex -> Term -> LogEntry Command
-mkLogEntry i t = LogEntry { _logEntryIndex = i
-                          , _logEntryTerm = t
-                          , _logEntryCommand = NoOp
-                          , _logEntryRequestId = 0 }
+mkLogEntry i t = LogEntry { _index = i
+                          , _term = t
+                          , _command = NoOp
+                          , _requestId = 0 }
 
 mkServerState :: ServerId -> [ServerId] -> Int -> MonotonicCounter -> ServerState Command () StateMachineM
 mkServerState self others electionTimeout heartbeatTimeout =

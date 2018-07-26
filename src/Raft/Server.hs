@@ -111,5 +111,5 @@ mkServerState self others (electLow, electHigh, electSeed) hbTimeout firstComman
                         , _votesReceived = 0
                         , _apply = apply
                         }
-        emptyLog = [LogEntry { _logEntryIndex = 0, _logEntryTerm = 0, _logEntryCommand = firstCommand, _logEntryRequestId = 0 }]
+        emptyLog = [LogEntry { _index = 0, _term = 0, _command = firstCommand, _requestId = 0 }]
         initialMap = foldl' (\m sid -> Map.insert sid 0 m) Map.empty others
