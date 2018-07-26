@@ -108,21 +108,20 @@ handleAppendEntriesRes :: MonadLogger m => ServerId -> ServerId -> AppendEntries
 handleAppendEntriesRes from to r = do
   isLeader <- (== Leader) <$> use role
   when isLeader $ do
-    -- N.B. need to "update nextIndex and matchIndex for follower"
-    -- but not sure what to update it to.
-    -- For now:
-    -- matchIndex[followerId] := nextIndex[followerId]
+    -- update nextIndex and matchIndex for follower
+    -- the follower has told us what its most recent log entry is,
+    -- so we set matchIndex equal to that and nextIndex to the index after that.
+    -- matchIndex[followerId] := RPC.index
     -- nextIndex[followerId] := RPC.index + 1
     next <- use $ nextIndex . at from
     match <- use $ matchIndex . at from
     case (next, match) of
       (Just n, Just m) -> do
-        let (next', match') = if r^.success then (r^.logIndex + 1, n) else (n - 1, m)
-        nextIndex . at from ?= next'
-        matchIndex . at from ?= match'
+        nextIndex . at from ?= r^.logIndex + 1
+        matchIndex . at from ?= r^.logIndex
         checkCommitIndex
         applyCommittedLogEntries
-        unless (r^.success) (sendAppendEntries from next')
+        unless (r^.success) $ sendAppendEntries from (r^.logIndex + 1)
       _ -> error "expected nextIndex and matchIndex to have element!"
 
 handleRequestVoteReq :: MonadLogger m => ServerId -> ServerId -> RequestVoteReq -> ServerT a b m ()
@@ -193,7 +192,9 @@ handleAppendEntries r = do
   currentTerm <- use serverTerm
   let (valid, reason) = validateAppendEntries currentTerm log r
   case valid of
-    False -> logInfoN reason >> pure False
+    False -> do
+      logInfoN reason
+      pure False
     True -> do
       unless (null (r^.entries)) $ logDebugN $ T.pack $ "Appending entries to log: " ++ show (map (^.index) (r^.entries))
       entryLog %= (\l -> appendEntries l (r^.entries))
