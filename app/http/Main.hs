@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds         #-}
 {-# LANGUAGE DeriveAnyClass    #-}
 {-# LANGUAGE DeriveGeneric     #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE NamedFieldPuns    #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeOperators     #-}
@@ -14,22 +15,22 @@ import           Data.Aeson
 import qualified Data.Map.Strict            as Map
 import           Data.Maybe                 (fromJust)
 import qualified Data.Text                  as T (pack)
-import           GHC.Generics
+import           GHC.Generics               hiding (to)
 import           Network.HTTP.Client        (Manager, defaultManagerSettings,
                                              newManager)
 import           Network.Wai.Handler.Warp   (run)
 import qualified Raft                       (Message (..))
-import           Raft.Log                   (LogEntry, RequestId, Term,
-                                             unRequestId)
-import           Raft.Rpc                   (AppendEntries, RequestVote)
+import           Raft.Lens                  hiding (apply)
+import           Raft.Log                   (LogEntry, LogIndex, RequestId,
+                                             Term, unRequestId)
+import qualified Raft.Rpc                   as Rpc
 import           Raft.Server                (MonotonicCounter (..), ServerId,
                                              ServerId (..), ServerState,
                                              mkServerState)
 import           Servant
 import           Servant.Client
 import qualified Server                     as S (Config (..), logState,
-                                                  printLog, processMessage,
-                                                  processTick)
+                                                  processMessage, processTick)
 import           System.Environment         (getArgs)
 import           System.Random
 
@@ -46,84 +47,44 @@ data CommandResponse = CRRead Int | CRUnit deriving (Eq, Show, Generic, FromJSON
 apply :: Monad m => Command -> StateMachineT m CommandResponse
 apply NoOp    = pure CRUnit
 apply Get     = CRRead <$> gets value
-apply (Set n) = modify' (\s -> s { value = n }) >> pure CRUnit
+apply (Set n) = modify' (\s -> s { value = n }) >> pure (CRRead n)
 
 type Message = Raft.Message Command CommandResponse
-
--- The request and response types for our API
-data AppendEntriesReq = AppendEntriesReq { aeReqFrom    :: ServerId
-                                         , aeReqTo      :: ServerId
-                                         , aeReqPayload :: AppendEntries Command
-                                         } deriving (Eq, Show, Generic, FromJSON, ToJSON)
-data AppendEntriesRes = AppendEntriesRes { aeResFrom    :: ServerId
-                                         , aeResTo      :: ServerId
-                                         , aeResPayload :: (Term, Bool)
-                                         } deriving (Eq, Show, Generic, FromJSON, ToJSON)
-data RequestVoteReq = RequestVoteReq { rvReqFrom    :: ServerId
-                                     , rvReqTo      :: ServerId
-                                     , rvReqPayload :: RequestVote Command
-                                     } deriving (Eq, Show, Generic, FromJSON, ToJSON)
-data RequestVoteRes = RequestVoteRes { rvResFrom    :: ServerId
-                                     , rvResTo      :: ServerId
-                                     , rvResPayload :: (Term, Bool)
-                                     } deriving (Eq, Show, Generic, FromJSON, ToJSON)
-data ClientReq = ClientReq { cReqTo      :: ServerId
-                           , cReqId      :: RequestId
-                           , cReqPayload :: Command
-                           } deriving (Eq, Show, Generic, FromJSON, ToJSON)
-data ClientRes = ClientRes { cResFrom    :: ServerId
-                           , cResId      :: RequestId
-                           , cResPayload :: CommandResponse
-                           } deriving (Eq, Show, Generic, FromJSON, ToJSON)
 
 -- This lets us convert the individual API types to/from the single Raft Message type
 class (RaftMessage a) where
   toRaftMessage :: a -> Message
   fromRaftMessage :: Message -> Maybe a
 
-instance RaftMessage AppendEntriesReq where
-  toRaftMessage AppendEntriesReq { aeReqFrom, aeReqTo, aeReqPayload } =
-    Raft.AppendEntriesReq aeReqFrom aeReqTo aeReqPayload
-  fromRaftMessage (Raft.AppendEntriesReq from to payload) =
-    Just $ AppendEntriesReq from to payload
-  fromRaftMessage _ = Nothing
+instance RaftMessage (Rpc.AppendEntries Command) where
+  toRaftMessage = Raft.AEReq
+  fromRaftMessage (Raft.AEReq r) = Just r
+  fromRaftMessage _              = Nothing
 
-instance RaftMessage AppendEntriesRes where
-  toRaftMessage AppendEntriesRes { aeResFrom, aeResTo, aeResPayload } =
-    Raft.AppendEntriesRes aeResFrom aeResTo aeResPayload
-  fromRaftMessage (Raft.AppendEntriesRes from to payload) =
-    Just $ AppendEntriesRes from to payload
-  fromRaftMessage _ = Nothing
+instance RaftMessage Rpc.AppendEntriesResponse where
+  toRaftMessage = Raft.AERes
+  fromRaftMessage (Raft.AERes r) = Just r
+  fromRaftMessage _              = Nothing
 
-instance RaftMessage RequestVoteReq where
-  toRaftMessage RequestVoteReq { rvReqFrom, rvReqTo, rvReqPayload } =
-    Raft.RequestVoteReq rvReqFrom rvReqTo rvReqPayload
-  fromRaftMessage (Raft.RequestVoteReq from to payload) =
-    Just $ RequestVoteReq from to payload
-  fromRaftMessage _ = Nothing
+instance RaftMessage (Rpc.RequestVote Command) where
+  toRaftMessage = Raft.RVReq
+  fromRaftMessage (Raft.RVReq r) = Just r
+  fromRaftMessage _              = Nothing
 
-instance RaftMessage RequestVoteRes where
-  toRaftMessage RequestVoteRes { rvResTo, rvResFrom, rvResPayload } =
-    Raft.RequestVoteRes rvResTo rvResFrom rvResPayload
-  fromRaftMessage (Raft.RequestVoteRes from to payload) =
-    Just $ RequestVoteRes from to payload
-  fromRaftMessage _ = Nothing
+instance RaftMessage Rpc.RequestVoteResponse where
+  toRaftMessage = Raft.RVRes
+  fromRaftMessage (Raft.RVRes r) = Just r
+  fromRaftMessage _              = Nothing
 
-instance RaftMessage ClientReq where
-  toRaftMessage ClientReq { cReqId, cReqTo, cReqPayload } =
-    Raft.ClientRequest cReqTo cReqId cReqPayload
-  fromRaftMessage (Raft.ClientRequest to reqId payload) =
-    Just $ ClientReq to reqId payload
-  fromRaftMessage _ = Nothing
+instance RaftMessage (Rpc.ClientReq Command) where
+  toRaftMessage = Raft.CReq
+  fromRaftMessage (Raft.CReq r) = Just r
+  fromRaftMessage _             = Nothing
 
-instance RaftMessage ClientRes where
-  toRaftMessage ClientRes { cResId, cResFrom, cResPayload } =
-    Raft.ClientResponse cResFrom cResId (Right cResPayload)
-  fromRaftMessage (Raft.ClientResponse to reqId response) =
-    case response of
-      Left err -> Nothing
-      Right r  -> Just $ ClientRes to reqId r
-  fromRaftMessage _ = Nothing
+instance RaftMessage (Rpc.ClientResponse CommandResponse) where
+  toRaftMessage = Raft.CRes
+  fromRaftMessage (Raft.CRes r) = Just r
+  fromRaftMessage _             = Nothing
 
 -- Required additional To/FromJSON instances
 instance ToJSON ServerId
@@ -134,17 +95,25 @@ instance ToJSON RequestId
 instance FromJSON RequestId
 instance ToJSON a => ToJSON (LogEntry a)
 instance FromJSON a => FromJSON (LogEntry a)
-instance ToJSON a => ToJSON (AppendEntries a)
-instance FromJSON a => FromJSON (AppendEntries a)
-instance ToJSON a => ToJSON (RequestVote a)
-instance FromJSON a => FromJSON (RequestVote a)
+instance ToJSON a => ToJSON (Rpc.AppendEntries a)
+instance FromJSON a => FromJSON (Rpc.AppendEntries a)
+instance ToJSON Rpc.AppendEntriesResponse
+instance FromJSON Rpc.AppendEntriesResponse
+instance ToJSON a => ToJSON (Rpc.RequestVote a)
+instance FromJSON a => FromJSON (Rpc.RequestVote a)
+instance ToJSON Rpc.RequestVoteResponse
+instance FromJSON Rpc.RequestVoteResponse
+instance ToJSON a => ToJSON (Rpc.ClientReq a)
+instance FromJSON a => FromJSON (Rpc.ClientReq a)
+instance ToJSON b => ToJSON (Rpc.ClientResponse b)
+instance FromJSON b => FromJSON (Rpc.ClientResponse b)
 
 -- Our API
-type RaftAPI = "AppendEntriesRequest" :> ReqBody '[JSON] AppendEntriesReq :> Post '[JSON] ()
-          :<|> "AppendEntriesResponse" :> ReqBody '[JSON] AppendEntriesRes :> Post '[JSON] ()
-          :<|> "RequestVoteRequest" :> ReqBody '[JSON] RequestVoteReq :> Post '[JSON] ()
-          :<|> "RequestVoteResponse" :> ReqBody '[JSON] RequestVoteRes :> Post '[JSON] ()
-          :<|> "Client" :> ReqBody '[JSON] ClientReq :> Post '[JSON] ClientRes
+type RaftAPI = "AppendEntriesRequest" :> ReqBody '[JSON] (Rpc.AppendEntries Command) :> Post '[JSON] ()
+          :<|> "AppendEntriesResponse" :> ReqBody '[JSON] Rpc.AppendEntriesResponse :> Post '[JSON] ()
+          :<|> "RequestVoteRequest" :> ReqBody '[JSON] (Rpc.RequestVote Command) :> Post '[JSON] ()
+          :<|> "RequestVoteResponse" :> ReqBody '[JSON] Rpc.RequestVoteResponse :> Post '[JSON] ()
+          :<|> "Client" :> ReqBody '[JSON] (Rpc.ClientReq Command) :> Post '[JSON] (Rpc.ClientResponse CommandResponse)
 
 -- A server for our API
 server :: Config -> Server RaftAPI
@@ -158,9 +127,9 @@ server config =
 serveGeneric :: RaftMessage a => Config -> a -> Handler ()
 serveGeneric config req = liftIO $ runLogger $ S.processMessage config (toRaftMessage req)
 
-serveClientRequest :: Config -> ClientReq -> Handler ClientRes
+serveClientRequest :: Config -> Rpc.ClientReq Command -> Handler (Rpc.ClientResponse CommandResponse)
 serveClientRequest config req = liftIO $ runLogger $ do
-  let reqId = cReqId req
+  let reqId = req^.clientRequestId
       reqMapVar = S.requests config
   -- insert this request into the request map
   var <- liftIO newEmptyMVar
@@ -183,11 +152,11 @@ app :: Config -> Application
 app config = serve raftAPI (server config)
 
 -- A client for our API
-sendAppendEntriesReq :: AppendEntriesReq -> ClientM ()
-sendAppendEntriesRes :: AppendEntriesRes -> ClientM ()
-sendRequestVoteReq :: RequestVoteReq -> ClientM ()
-sendRequestVoteRes :: RequestVoteRes -> ClientM ()
-sendClientRequest :: ClientReq -> ClientM ClientRes
+sendAppendEntriesReq :: Rpc.AppendEntries Command -> ClientM ()
+sendAppendEntriesRes :: Rpc.AppendEntriesResponse -> ClientM ()
+sendRequestVoteReq :: Rpc.RequestVote Command -> ClientM ()
+sendRequestVoteRes :: Rpc.RequestVoteResponse -> ClientM ()
+sendClientRequest :: Rpc.ClientReq Command -> ClientM (Rpc.ClientResponse CommandResponse)
 (sendAppendEntriesReq :<|> sendAppendEntriesRes :<|> sendRequestVoteReq :<|> sendRequestVoteRes :<|> sendClientRequest) =
   client raftAPI
 
@@ -231,40 +200,41 @@ deliverMessages config manager = do
 sendRpc :: Message -> ClientEnv -> Config -> LoggingT IO ()
 sendRpc rpc env config =
   case rpc of
-    r@Raft.RequestVoteReq{} -> do
-      let rpc = (sendRequestVoteReq . fromJust . fromRaftMessage) r
+    Raft.RVReq r -> do
+      let rpc = sendRequestVoteReq r
       res <- run rpc env
       case res of
         Left err -> logDebugN "Error sending RequestVoteReq RPC"
         Right _  -> pure ()
-    r@Raft.AppendEntriesReq{} -> do
-      let rpc = (sendAppendEntriesReq . fromJust . fromRaftMessage) r
+    Raft.AEReq r -> do
+      let rpc = sendAppendEntriesReq r
       res <- run rpc env
       case res of
-        Left err -> logDebugN "Error sending AppendEntriesReq RPC"
+        -- Left err -> logDebugN "Error sending AppendEntriesReq RPC"
         Right () -> pure ()
-    r@Raft.RequestVoteRes{} -> do
-      let rpc = (sendRequestVoteRes . fromJust . fromRaftMessage) r
+    Raft.RVRes r -> do
+      let rpc = sendRequestVoteRes r
       res <- run rpc env
       case res of
         Left err -> logDebugN "Error sending RequestVoteRes RPC"
         Right _  -> pure ()
-    r@Raft.AppendEntriesRes{} -> do
-      let rpc = (sendAppendEntriesRes . fromJust . fromRaftMessage) r
+    Raft.AERes r -> do
+      let rpc = sendAppendEntriesRes r
       res <- run rpc env
       case res of
         Left err -> logDebugN "Error sending AppendEntriesRes RPC"
         Right () -> pure ()
-    r@(Raft.ClientResponse _ reqId _) -> do
+    Raft.CRes r -> do
       -- if we get a client response, we need to find the request that it
       -- originated from and place it in the corresponding MVar in
       -- config.requests
+      let reqId = r^.responseId
       logDebugN "Processing client response"
       reqs <- liftIO $ readMVar (S.requests config)
       case Map.lookup reqId reqs of
         -- assume that the request was made to a different node
         Nothing     -> logInfoN $ T.pack $ "Ignoring client request [" ++ show (unRequestId reqId) ++ "] - not present in map"
-        Just resVar -> liftIO $ putMVar resVar r
+        Just resVar -> liftIO $ putMVar resVar (toRaftMessage r)
     r -> error $ "Unexpected rpc: " ++ show r
   where run rpc env = liftIO $ runClientM rpc env
 
@@ -287,7 +257,8 @@ mkServer self others electionTimeout heartbeatTimeout =
       mkServerState self others electionTimeout heartbeatTimeout NoOp apply
 
 rpcTo :: Message -> ServerId
-rpcTo (Raft.AppendEntriesReq _ to _) = to
-rpcTo (Raft.AppendEntriesRes _ to _) = to
-rpcTo (Raft.RequestVoteReq _ to _)   = to
-rpcTo (Raft.RequestVoteRes _ to _)   = to
+rpcTo msg = case msg of
+  Raft.AEReq r -> r^.to
+  Raft.AERes r -> r^.to
+  Raft.RVReq r -> r^.to
+  Raft.RVRes r -> r^.to

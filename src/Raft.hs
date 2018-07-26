@@ -21,6 +21,7 @@ import qualified Safe                        (at)
 
 import           Control.Monad.Logger
 
+import           Raft.Lens
 import           Raft.Log
 import           Raft.Rpc
 import           Raft.Server
@@ -29,17 +30,14 @@ import           Raft.Server
 (!!) :: [a] -> Int -> a
 (!!) = Safe.at
 
--- TODO: AppendEntriesRes should include the latest replicated log index, so the
--- leader can update nextIndex
-data Message a b =
-    AppendEntriesReq ServerId ServerId (AppendEntries a)
-  | AppendEntriesRes ServerId ServerId (Term, Bool)
-  | RequestVoteReq ServerId ServerId (RequestVote a)
-  | RequestVoteRes ServerId ServerId (Term, Bool)
-  | Tick ServerId
-  | ClientRequest ServerId RequestId a
-  | ClientResponse ServerId RequestId (Either T.Text b)
-  deriving (Generic)
+data Message a b = AEReq (AppendEntries a)
+                 | AERes AppendEntriesResponse
+                 | RVReq (RequestVote a)
+                 | RVRes RequestVoteResponse
+                 | CReq (ClientReq a)
+                 | CRes (ClientResponse b)
+                 | Tick
+                 deriving (Generic)
 
 deriving instance (Typeable a, Typeable b) => Typeable (Message a b)
 instance (Binary a, Binary b) => Binary (Message a b)
@@ -60,13 +58,13 @@ handleMessage m = snd <$> runWriterT go
     go = applyCommittedLogEntries >> handler
     handler =
       case m of
-        Tick _                     -> handleTick
-        AppendEntriesReq from to r -> handleAppendEntriesReq from to r -- we check for new term if AppendEntries succeeds
-        AppendEntriesRes from to r -> checkForNewTerm (fst r) >> handleAppendEntriesRes from to r
-        RequestVoteReq from to r   -> checkForNewTerm (r^.candidateTerm) >> handleRequestVoteReq from to r
-        RequestVoteRes from to r   -> checkForNewTerm (fst r) >> handleRequestVoteRes from to r
-        ClientRequest _ reqId r    -> handleClientRequest reqId r
-        ClientResponse{}           -> undefined -- what could/should we do here?
+        Tick    -> handleTick
+        AEReq r -> handleAppendEntriesReq (r^.from) (r^.to) r -- we check for new term if AppendEntries succeeds
+        AERes r -> checkForNewTerm (r^.term) >> handleAppendEntriesRes (r^.from) (r^.to) r
+        RVReq r -> checkForNewTerm (r^.candidateTerm) >> handleRequestVoteReq (r^.from) (r^.to) r
+        RVRes r -> checkForNewTerm (r^.voterTerm) >> handleRequestVoteRes (r^.from) (r^.to) r
+        CReq r -> handleClientRequest r
+        CRes r -> undefined -- what should we do here?
 
 handleTick :: MonadLogger m => ServerT a b m ()
 handleTick = do
@@ -83,11 +81,17 @@ handleTick = do
 
 handleAppendEntriesReq :: MonadLogger m => ServerId -> ServerId -> AppendEntries a -> ServerT a b m ()
 handleAppendEntriesReq from to r = do
+  checkForNewTerm (r^.leaderTerm)
   success <- handleAppendEntries r
-  when success $ checkForNewTerm (r^.leaderTerm)
   electionTimer .= 0
   updatedTerm <- use serverTerm
-  tell [AppendEntriesRes to from (updatedTerm, success)]
+  lastLog <- last <$> use entryLog
+  tell [AERes AppendEntriesResponse { _appendEntriesResponseFrom = to
+                                    , _appendEntriesResponseTo = from
+                                    , _appendEntriesResponseTerm = updatedTerm
+                                    , _appendEntriesResponseSuccess = success
+                                    , _appendEntriesResponseLogIndex = lastLog^.index
+                                    }]
 
 checkForNewTerm :: MonadLogger m => Term -> ServerT a b m ()
 checkForNewTerm rpcTerm = do
@@ -98,25 +102,25 @@ checkForNewTerm rpcTerm = do
     serverTerm .= rpcTerm
     when isCandidateOrLeader convertToFollower
 
-handleAppendEntriesRes :: MonadLogger m => ServerId -> ServerId -> (Term, Bool) -> ServerT a b m ()
-handleAppendEntriesRes from to (term, success) = do
+handleAppendEntriesRes :: MonadLogger m => ServerId -> ServerId -> AppendEntriesResponse -> ServerT a b m ()
+handleAppendEntriesRes from to r = do
   isLeader <- (== Leader) <$> use role
   when isLeader $ do
     -- N.B. need to "update nextIndex and matchIndex for follower"
     -- but not sure what to update it to.
     -- For now:
-    -- update matchIndex[followerId] = nextIndex[followerId]
-    -- increment nextIndex[followerId]
+    -- matchIndex[followerId] := nextIndex[followerId]
+    -- nextIndex[followerId] := RPC.index + 1
     next <- use $ nextIndex . at from
     match <- use $ matchIndex . at from
     case (next, match) of
       (Just n, Just m) -> do
-        let (next', match') = if success then (n + 1, n) else (n - 1, m)
+        let (next', match') = if r^.success then (r^.logIndex + 1, n) else (n - 1, m)
         nextIndex . at from ?= next'
         matchIndex . at from ?= match'
         checkCommitIndex
         applyCommittedLogEntries
-        unless success (sendAppendEntries from next')
+        unless (r^.success) (sendAppendEntries from next')
       _ -> error "expected nextIndex and matchIndex to have element!"
 
 handleRequestVoteReq :: MonadLogger m => ServerId -> ServerId -> RequestVote a -> ServerT a b m ()
@@ -125,10 +129,15 @@ handleRequestVoteReq from to r = do
   voteGranted <- handleRequestVote r
   updatedTerm <- use serverTerm
   logInfoN (T.pack $ "Sending RequestVoteRes from " ++ show from ++ " to " ++ show to)
-  tell [RequestVoteRes to from (updatedTerm, voteGranted)]
+  tell [RVRes RequestVoteResponse { _from = to
+                                  , _to = from
+                                  , _voterTerm = updatedTerm
+                                  , _requestVoteSuccess = voteGranted
+                                  } ]
 
-handleRequestVoteRes :: MonadLogger m => ServerId -> ServerId -> (Term, Bool) -> ServerT a b m ()
-handleRequestVoteRes from to (_term, voteGranted) = do
+handleRequestVoteRes :: MonadLogger m => ServerId -> ServerId -> RequestVoteResponse -> ServerT a b m ()
+handleRequestVoteRes from to r = do
+  let voteGranted = r^.requestVoteSuccess
   isCandidate <- (== Candidate) <$> use role
   unless isCandidate $ logInfoN (T.pack $ "Ignoring RequestVoteRes from " ++ show from ++ ": not candidate")
   logInfoN (T.pack $ "Received RequestVoteRes from " ++ show from ++ ", to " ++ show to ++ ", vote granted: " ++ show voteGranted)
@@ -141,10 +150,10 @@ handleRequestVoteRes from to (_term, voteGranted) = do
       logInfoN (T.pack $ "obtained " ++ show (votes % total) ++ " majority")
       convertToLeader
 
-handleClientRequest :: MonadLogger m => RequestId -> a -> ServerT a b m ()
-handleClientRequest reqId c = do
-  -- TODO: followers should redirect request to leader
-  -- TODO: we should actually respond to the request
+handleClientRequest :: MonadLogger m => ClientReq a -> ServerT a b m ()
+handleClientRequest r = do
+  let c = r^.requestPayload
+      reqId = r^.clientRequestId
   role <- use role
   votedFor <- use votedFor
   self <- use selfId
@@ -154,20 +163,26 @@ handleClientRequest reqId c = do
       log <- use entryLog
       currentTerm <- use serverTerm
       let nextIndex = toInteger $ length log
-          entry = LogEntry { _Index = nextIndex
-                           , _Term = currentTerm
-                           , _Command = c
-                           , _RequestId = reqId}
+          entry = LogEntry { _logEntryIndex = nextIndex
+                           , _logEntryTerm = currentTerm
+                           , _logEntryCommand = c
+                           , _logEntryRequestId = reqId}
       entryLog %= \log -> log ++ [entry]
       -- broadcast this new entry to followers
       serverIds <- use serverIds
       mapM_ (`sendAppendEntries` nextIndex) serverIds
     (_, Just leader) -> do
-      logInfoN (T.pack $ "redirecting client request to leader " ++ show leader)
-      tell [ClientRequest leader reqId c]
+      -- TODO: redirect request to leader
+      -- either:
+      --  - forward it to leader verbatim
+      --  - send error response to client with address of leader, let client
+      --    make the request again
+      pure ()
     (_, Nothing) -> do
       logInfoN "received client request but unable to identify leader: failing request"
-      tell [ClientResponse self reqId (Left "invalid request: node is not leader")]
+      tell [CRes ClientResponse { _responsePayload = Left "invalid request: node is not leader"
+                                , _responseId = reqId
+                                } ]
       pure ()
 
 -- reply false if term < currentTerm
@@ -181,14 +196,15 @@ handleAppendEntries r = do
   log <- use entryLog
   currentCommitIndex <- use commitIndex
   currentTerm <- use serverTerm
-  case validateAppendEntries currentTerm log r of
-    (False, reason) -> logInfoN reason >> pure False
-    (True, _) -> do
+  let (valid, reason) = validateAppendEntries currentTerm log r
+  case valid of
+    False -> logInfoN reason >> pure False
+    True -> do
+      unless (null (r^.entries)) $ logDebugN $ T.pack $ "Appending entries to log: " ++ show (map (^.index) (r^.entries))
       entryLog %= (\l -> appendEntries l (r^.entries))
       when (r^.leaderCommit > currentCommitIndex) $ do
         lastNewEntry <- last <$> use entryLog
         commitIndex .= min (r^.leaderCommit) (lastNewEntry^.index)
-      logDebugN "AppendEntries approved"
       pure True
 
 -- TODO: this is a crap return type - improve it
@@ -207,29 +223,29 @@ validateAppendEntries currentTerm log rpc =
 appendEntries :: Log a -> [LogEntry a] -> Log a
 appendEntries log [] = log
 appendEntries [] es  = es
-appendEntries (l:ls) (e:es) = case compare (_Index l) (_Index e) of
+appendEntries (l:ls) (e:es) = case compare (l^.index) (e^.index) of
                                LT -> l : appendEntries ls (e:es)
-                               EQ -> if _Term l /= _Term e
+                               EQ -> if l^.term /= e^.term
                                         then e:es
                                         else l : appendEntries ls es
                                GT -> e:es
 
 -- reply false if term < currentTerm
--- if votedFor is null or candidateId, and candidate's log is at least as
+-- if votedFor is null or candidateId (rpc.from), and candidate's log is at least as
 --   up-to-date as receiver's log, grant vote
 handleRequestVote :: MonadLogger m => RequestVote a -> ServerT a b m Bool
 handleRequestVote r = do
   s <- get
   let currentTerm = s ^. serverTerm
-      matchingVote = s ^. votedFor == Just (r ^. candidateId)
+      matchingVote = s ^. votedFor == Just (r ^. from)
       logUpToDate = upToDate (r^.lastLogIndex) (r^.lastLogTerm) (s^.entryLog)
-  if _CandidateTerm r < currentTerm
+  if r^.candidateTerm < currentTerm
      then do
        logInfoN "RequestVote denied: candidate term < current term"
        pure False
      else case (isNothing (s^.votedFor) || matchingVote, logUpToDate) of
             (True, True) -> do
-              votedFor .= Just (r ^. candidateId)
+              votedFor .= Just (r ^. from)
               logInfoN "RequestVote granted"
               pure True
             (False, _) -> do
@@ -292,12 +308,13 @@ convertToCandidate = do
   votesReceived .= 1
   electionTimer .= 0
   electionTimeout %= nextTimeout
-  let rpc = RequestVote { _CandidateTerm = newTerm
-                        , _CandidateId = ownId
-                        , _LastLogIndex = lastLogEntry ^. index
-                        , _LastLogTerm = lastLogEntry ^. term }
+  let rpc sid = RequestVote { _requestVoteFrom = ownId
+                            , _requestVoteTo = sid
+                            , _requestVoteCandidateTerm = newTerm
+                            , _requestVoteLastLogIndex = lastLogEntry ^. index
+                            , _requestVoteLastLogTerm = lastLogEntry ^. term }
   mapM_ (\i -> logInfoN (T.pack $ "Sending RequestVoteReq from self (" ++ show ownId ++ ") to " ++ show i)) servers
-  tell $ map (\i -> RequestVoteReq ownId i rpc) servers
+  tell $ map (RVReq . rpc) servers
 
 -- send initial empty AppendEntries RPCs (hearbeats) to each server
 convertToLeader :: MonadLogger m => ServerT a b m ()
@@ -328,12 +345,13 @@ sendHeartbeats = do
   commitIndex <- use commitIndex
   log <- use entryLog
   let lastEntry = last log
-      mkHeartbeat to = AppendEntriesReq selfId to AppendEntries { _LeaderTerm = currentTerm
-                                                                , _LeaderId = selfId
-                                                                , _PrevLogIndex = lastEntry ^. index
-                                                                , _PrevLogTerm = lastEntry ^. term
-                                                                , _Entries = []
-                                                                , _LeaderCommit = commitIndex }
+      mkHeartbeat to = AEReq AppendEntries { _appendEntriesLeaderTerm = currentTerm
+                                           , _appendEntriesFrom = selfId
+                                           , _appendEntriesTo = to
+                                           , _appendEntriesPrevLogIndex = lastEntry ^. index
+                                           , _appendEntriesPrevLogTerm = lastEntry ^. term
+                                           , _appendEntriesEntries = []
+                                           , _appendEntriesLeaderCommit = commitIndex }
   tell $ map mkHeartbeat servers
   heartbeatTimer .= 0
 
@@ -343,17 +361,15 @@ sendAppendEntries followerId logIndex = do
   selfId <- use selfId
   log <- use entryLog
   commitIndex <- use commitIndex
-  logInfoN $ T.pack $ "logIndex: " ++ show logIndex
-  logInfoN $ T.pack $ "log length: " ++ show (length log)
   let entry = log !! fromInteger logIndex
       prevEntry = log !! fromInteger (logIndex - 1)
-      ae = AppendEntries { _LeaderTerm = currentTerm
-                         , _LeaderId = selfId
-                         , _PrevLogIndex = prevEntry ^. index
-                         , _PrevLogTerm = prevEntry ^. term
-                         , _Entries = [entry]
-                         , _LeaderCommit = commitIndex }
-      req = AppendEntriesReq selfId followerId ae
+      req = AEReq AppendEntries { _appendEntriesLeaderTerm = currentTerm
+                               , _appendEntriesFrom = selfId
+                               , _appendEntriesTo = followerId
+                               , _appendEntriesPrevLogIndex = prevEntry ^. index
+                               , _appendEntriesPrevLogTerm = prevEntry ^. term
+                               , _appendEntriesEntries = [entry]
+                               , _appendEntriesLeaderCommit = commitIndex }
   tell [req]
   heartbeatTimer .= 0
 
@@ -396,5 +412,7 @@ applyCommittedLogEntries = do
     lastApplied' <- lastApplied <+= 1
     let entry = fromJust $ findByIndex log lastApplied'
     logInfoN (T.pack $ "applying entry " ++ show (entry^.index))
-    res <- (lift . lift) $ apply (_Command entry)
-    tell [ClientResponse self (entry^.requestId) (Right res)]
+    res <- (lift . lift) $ apply (entry^.command)
+    tell [CRes ClientResponse { _responsePayload = Right res
+                              , _responseId = entry^.requestId
+                              }]

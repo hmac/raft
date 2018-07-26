@@ -28,14 +28,12 @@ newtype RequestId = RequestId
   } deriving (Eq, Ord, Num, Show, Generic, Typeable, Binary, Hashable)
 
 data LogEntry a = LogEntry
-  { _Index     :: LogIndex
-  , _Term      :: Term
-  , _Command   :: a
-  , _RequestId :: RequestId
+  { _logEntryIndex     :: LogIndex
+  , _logEntryTerm      :: Term
+  , _logEntryCommand   :: a
+  , _logEntryRequestId :: RequestId
   } deriving (Generic)
 
 instance Binary a => Binary (LogEntry a)
 deriving instance (Show a) => Show (LogEntry a)
 deriving instance (Eq a) => Eq (LogEntry a)
-
-makeLenses ''LogEntry

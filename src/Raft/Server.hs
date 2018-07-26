@@ -75,13 +75,11 @@ data ServerState a b machineM = ServerState
 
 data Timeout = Timeout { low :: Int, high :: Int, gen :: StdGen } deriving (Show)
 
-makeLenses ''ServerState
-
 instance Show (ServerState a b m) where
   show s = "ServerState { " ++
-    "selfId = " ++ show (s^.selfId) ++ ", " ++
-    "serverId = " ++ show (s^.serverIds) ++ ", " ++
-    "votedFor = " ++ show (s^.votedFor) ++ "}"
+    "selfId = " ++ show (_selfId s) ++ ", " ++
+    "serverId = " ++ show (_serverIds s) ++ ", " ++
+    "votedFor = " ++ show (_votedFor s) ++ "}"
 
 nextTimeout :: Timeout -> Timeout
 nextTimeout t = let (_, gen') = randomR (low t, high t) (gen t)
@@ -113,5 +111,5 @@ mkServerState self others (electLow, electHigh, electSeed) hbTimeout firstComman
                         , _votesReceived = 0
                         , _apply = apply
                         }
-        emptyLog = [LogEntry { _Index = 0, _Term = 0, _Command = firstCommand, _RequestId = 0 }]
+        emptyLog = [LogEntry { _logEntryIndex = 0, _logEntryTerm = 0, _logEntryCommand = firstCommand, _logEntryRequestId = 0 }]
         initialMap = foldl' (\m sid -> Map.insert sid 0 m) Map.empty others
