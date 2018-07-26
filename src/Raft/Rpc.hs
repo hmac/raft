@@ -8,7 +8,7 @@
 module Raft.Rpc (
   AppendEntriesReq(..)
 , AppendEntriesRes(..)
-, RequestVote(..)
+, RequestVoteReq(..)
 , RequestVoteResponse(..)
 , ClientReq(..)
 , ClientResponse(..))
@@ -57,22 +57,20 @@ data AppendEntriesRes = AppendEntriesRes
 
 instance Binary AppendEntriesRes
 
--- TODO: rename to RequestVoteReq
--- TODO: remove type parameter - not needed?
-data RequestVote = RequestVote
+data RequestVoteReq = RequestVoteReq
   -- ID of sender
-  { _requestVoteFrom          :: ServerId
+  { _requestVoteReqFrom          :: ServerId
   -- ID of receiver
-  , _requestVoteTo            :: ServerId
+  , _requestVoteReqTo            :: ServerId
   -- candidate's term
-  , _requestVoteCandidateTerm :: Term
+  , _requestVoteReqCandidateTerm :: Term
   -- index of candidate's last log entry
-  , _requestVoteLastLogIndex  :: LogIndex
+  , _requestVoteReqLastLogIndex  :: LogIndex
   -- term of candidate's last log entry
-  , _requestVoteLastLogTerm   :: Term
+  , _requestVoteReqLastLogTerm   :: Term
   } deriving (Generic, Eq, Show)
 
-instance Binary RequestVote
+instance Binary RequestVoteReq
 
 -- TODO: rename to RequestVoteRes
 data RequestVoteResponse = RequestVoteResponse

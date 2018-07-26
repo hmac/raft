@@ -294,11 +294,11 @@ testAppendEntriesRes = do
 testRequestVoteReq :: Spec
 testRequestVoteReq = do
   let mkNode = mkServerState 0 [1] 10 10
-      req cTerm lTerm lIndex = RVReq RequestVote { _requestVoteCandidateTerm = cTerm
-                                                 , _requestVoteFrom = 1
-                                                 , _requestVoteTo = 0
-                                                 , _requestVoteLastLogIndex = lIndex
-                                                 , _requestVoteLastLogTerm = lTerm }
+      req cTerm lTerm lIndex = RVReq RequestVoteReq { _requestVoteReqCandidateTerm = cTerm
+                                                 , _requestVoteReqFrom = 1
+                                                 , _requestVoteReqTo = 0
+                                                 , _requestVoteReqLastLogIndex = lIndex
+                                                 , _requestVoteReqLastLogTerm = lTerm }
   context "if candidate's term < currentTerm" $ do
     let node = mkNode { _serverTerm = 2 }
     let ([RVRes rpc], _) = sendMsg node (req 1 0 0)

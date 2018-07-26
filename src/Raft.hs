@@ -32,7 +32,7 @@ import           Raft.Server
 
 data Message a b = AEReq (AppendEntriesReq a)
                  | AERes AppendEntriesRes
-                 | RVReq RequestVote
+                 | RVReq RequestVoteReq
                  | RVRes RequestVoteResponse
                  | CReq (ClientReq a)
                  | CRes (ClientResponse b)
@@ -123,7 +123,7 @@ handleAppendEntriesRes from to r = do
         unless (r^.success) (sendAppendEntries from next')
       _ -> error "expected nextIndex and matchIndex to have element!"
 
-handleRequestVoteReq :: MonadLogger m => ServerId -> ServerId -> RequestVote -> ServerT a b m ()
+handleRequestVoteReq :: MonadLogger m => ServerId -> ServerId -> RequestVoteReq -> ServerT a b m ()
 handleRequestVoteReq from to r = do
   logInfoN (T.pack $ "Received RequestVoteReq from " ++ show from)
   voteGranted <- handleRequestVote r
@@ -233,7 +233,7 @@ appendEntries (l:ls) (e:es) = case compare (l^.index) (e^.index) of
 -- reply false if term < currentTerm
 -- if votedFor is null or candidateId (rpc.from), and candidate's log is at least as
 --   up-to-date as receiver's log, grant vote
-handleRequestVote :: MonadLogger m => RequestVote -> ServerT a b m Bool
+handleRequestVote :: MonadLogger m => RequestVoteReq -> ServerT a b m Bool
 handleRequestVote r = do
   s <- get
   let currentTerm = s ^. serverTerm
@@ -308,11 +308,11 @@ convertToCandidate = do
   votesReceived .= 1
   electionTimer .= 0
   electionTimeout %= nextTimeout
-  let rpc sid = RequestVote { _requestVoteFrom = ownId
-                            , _requestVoteTo = sid
-                            , _requestVoteCandidateTerm = newTerm
-                            , _requestVoteLastLogIndex = lastLogEntry ^. index
-                            , _requestVoteLastLogTerm = lastLogEntry ^. term }
+  let rpc sid = RequestVoteReq { _requestVoteReqFrom = ownId
+                            , _requestVoteReqTo = sid
+                            , _requestVoteReqCandidateTerm = newTerm
+                            , _requestVoteReqLastLogIndex = lastLogEntry ^. index
+                            , _requestVoteReqLastLogTerm = lastLogEntry ^. term }
   mapM_ (\i -> logInfoN (T.pack $ "Sending RequestVoteReq from self (" ++ show ownId ++ ") to " ++ show i)) servers
   tell $ map (RVReq . rpc) servers
 
