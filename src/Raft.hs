@@ -31,7 +31,7 @@ import           Raft.Server
 (!!) = Safe.at
 
 data Message a b = AEReq (AppendEntriesReq a)
-                 | AERes AppendEntriesResponse
+                 | AERes AppendEntriesRes
                  | RVReq (RequestVote a)
                  | RVRes RequestVoteResponse
                  | CReq (ClientReq a)
@@ -86,12 +86,12 @@ handleAppendEntriesReq from to r = do
   electionTimer .= 0
   updatedTerm <- use serverTerm
   lastLog <- last <$> use entryLog
-  tell [AERes AppendEntriesResponse { _appendEntriesResponseFrom = to
-                                    , _appendEntriesResponseTo = from
-                                    , _appendEntriesResponseTerm = updatedTerm
-                                    , _appendEntriesResponseSuccess = success
-                                    , _appendEntriesResponseLogIndex = lastLog^.index
-                                    }]
+  tell [AERes AppendEntriesRes { _appendEntriesResFrom = to
+                               , _appendEntriesResTo = from
+                               , _appendEntriesResTerm = updatedTerm
+                               , _appendEntriesResSuccess = success
+                               , _appendEntriesResLogIndex = lastLog^.index
+                               }]
 
 checkForNewTerm :: MonadLogger m => Term -> ServerT a b m ()
 checkForNewTerm rpcTerm = do
@@ -102,7 +102,7 @@ checkForNewTerm rpcTerm = do
     serverTerm .= rpcTerm
     when isCandidateOrLeader convertToFollower
 
-handleAppendEntriesRes :: MonadLogger m => ServerId -> ServerId -> AppendEntriesResponse -> ServerT a b m ()
+handleAppendEntriesRes :: MonadLogger m => ServerId -> ServerId -> AppendEntriesRes -> ServerT a b m ()
 handleAppendEntriesRes from to r = do
   isLeader <- (== Leader) <$> use role
   when isLeader $ do

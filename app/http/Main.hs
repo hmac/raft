@@ -61,7 +61,7 @@ instance RaftMessage (Rpc.AppendEntriesReq Command) where
   fromRaftMessage (Raft.AEReq r) = Just r
   fromRaftMessage _              = Nothing
 
-instance RaftMessage Rpc.AppendEntriesResponse where
+instance RaftMessage Rpc.AppendEntriesRes where
   toRaftMessage = Raft.AERes
   fromRaftMessage (Raft.AERes r) = Just r
   fromRaftMessage _              = Nothing
@@ -97,8 +97,8 @@ instance ToJSON a => ToJSON (LogEntry a)
 instance FromJSON a => FromJSON (LogEntry a)
 instance ToJSON a => ToJSON (Rpc.AppendEntriesReq a)
 instance FromJSON a => FromJSON (Rpc.AppendEntriesReq a)
-instance ToJSON Rpc.AppendEntriesResponse
-instance FromJSON Rpc.AppendEntriesResponse
+instance ToJSON Rpc.AppendEntriesRes
+instance FromJSON Rpc.AppendEntriesRes
 instance ToJSON a => ToJSON (Rpc.RequestVote a)
 instance FromJSON a => FromJSON (Rpc.RequestVote a)
 instance ToJSON Rpc.RequestVoteResponse
@@ -110,7 +110,7 @@ instance FromJSON b => FromJSON (Rpc.ClientResponse b)
 
 -- Our API
 type RaftAPI = "AppendEntriesRequest" :> ReqBody '[JSON] (Rpc.AppendEntriesReq Command) :> Post '[JSON] ()
-          :<|> "AppendEntriesResponse" :> ReqBody '[JSON] Rpc.AppendEntriesResponse :> Post '[JSON] ()
+          :<|> "AppendEntriesRes" :> ReqBody '[JSON] Rpc.AppendEntriesRes :> Post '[JSON] ()
           :<|> "RequestVoteRequest" :> ReqBody '[JSON] (Rpc.RequestVote Command) :> Post '[JSON] ()
           :<|> "RequestVoteResponse" :> ReqBody '[JSON] Rpc.RequestVoteResponse :> Post '[JSON] ()
           :<|> "Client" :> ReqBody '[JSON] (Rpc.ClientReq Command) :> Post '[JSON] (Rpc.ClientResponse CommandResponse)
@@ -153,7 +153,7 @@ app config = serve raftAPI (server config)
 
 -- A client for our API
 sendAppendEntriesReq :: Rpc.AppendEntriesReq Command -> ClientM ()
-sendAppendEntriesRes :: Rpc.AppendEntriesResponse -> ClientM ()
+sendAppendEntriesRes :: Rpc.AppendEntriesRes -> ClientM ()
 sendRequestVoteReq :: Rpc.RequestVote Command -> ClientM ()
 sendRequestVoteRes :: Rpc.RequestVoteResponse -> ClientM ()
 sendClientRequest :: Rpc.ClientReq Command -> ClientM (Rpc.ClientResponse CommandResponse)

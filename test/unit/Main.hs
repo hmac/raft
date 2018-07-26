@@ -38,7 +38,7 @@ main = hspec $ do
   testAppendEntriesReq
   testRequestVoteReq
   testRequestVoteResponse
-  testAppendEntriesResponse
+  testAppendEntriesRes
 
 mkLogEntry :: LogIndex -> Term -> LogEntry Command
 mkLogEntry i t = LogEntry { _logEntryIndex = i
@@ -261,8 +261,8 @@ testAppendEntriesReq = do
           rpc^.logIndex `shouldBe` 2
           node'^.commitIndex `shouldBe` 0
 
-testAppendEntriesResponse :: Spec
-testAppendEntriesResponse = do
+testAppendEntriesRes :: Spec
+testAppendEntriesRes = do
   let (_, node_) = sendMsg (mkServerState 0 [1] 0 10) Tick -- trigger election
   let (_, node) = sendMsg node_ (RVRes RequestVoteResponse { _from = 1
                                                            , _to = 0
@@ -275,12 +275,12 @@ testAppendEntriesResponse = do
     it "should have nextIndex set to last log index + 1" $ do
       node^.nextIndex `shouldBe` Map.fromList [(1, 1)]
   context "if successful" $ do
-    let (msgs, node') = sendMsg node (AERes AppendEntriesResponse { _appendEntriesResponseFrom = 1
-                                                                  , _appendEntriesResponseTo = 0
-                                                                  , _appendEntriesResponseTerm = 0
-                                                                  , _appendEntriesResponseSuccess = True
-                                                                  , _appendEntriesResponseLogIndex = 1
-                                                                  } )
+    let (msgs, node') = sendMsg node (AERes AppendEntriesRes { _appendEntriesResFrom = 1
+                                                             , _appendEntriesResTo = 0
+                                                             , _appendEntriesResTerm = 0
+                                                             , _appendEntriesResSuccess = True
+                                                             , _appendEntriesResLogIndex = 1
+                                                             } )
     it "sends no RPCs in response" $
       msgs `shouldBe` []
     it "updates nextIndex" $ do

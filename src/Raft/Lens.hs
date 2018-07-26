@@ -12,7 +12,7 @@ import           Raft.Rpc
 import           Raft.Server
 
 makeFields ''AppendEntriesReq
-makeFields ''AppendEntriesResponse
+makeFields ''AppendEntriesRes
 makeFields ''RequestVote
 makeFieldsNoPrefix ''RequestVoteResponse
 makeFieldsNoPrefix ''ClientReq
