@@ -22,7 +22,7 @@ runClient args = do
   reqId <- RequestId <$> randomIO
   manager <- newManager defaultManagerSettings
   let url = fromMaybe (error "no address found") (lookup serverId serverAddrs)
-      env = ClientEnv manager url
+      env = ClientEnv { manager = manager, baseUrl = url, cookieJar = Nothing }
   res <- runClientM (sendClientRequest (req reqId)) env
   case res of
     Left err -> print err

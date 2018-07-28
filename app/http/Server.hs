@@ -124,7 +124,7 @@ deliverMessages :: Config -> Manager -> LoggingT IO ()
 deliverMessages config manager = do
   m <- liftIO $ readChan (queue config)
   let url = fromJust $ Map.lookup (rpcTo m) serverAddrs
-      env = ClientEnv manager url
+      env = ClientEnv { manager = manager, baseUrl = url, cookieJar = Nothing }
   sendRpc m env config
 
 -- TODO: if RPC cannot be delivered, enqueue it for retry

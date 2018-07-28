@@ -44,12 +44,6 @@ executables:
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
-    - raft
-    - distributed-process
-    - network
-    - network-transport
-    - network-transport-tcp
-    - bytestring
   http:
     main:               Main.hs
     source-dirs:        app/http
