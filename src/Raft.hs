@@ -1,5 +1,7 @@
 {-# LANGUAGE DeriveGeneric         #-}
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE FlexibleContexts      #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE StandaloneDeriving    #-}
 
@@ -30,6 +32,10 @@ import           Raft.Server
 -- alias Safe.at as !!
 (!!) :: [a] -> Int -> a
 (!!) = Safe.at
+
+-- Convenience function for when your writer monoid is List
+tell1 :: MonadWriter [a] m => a -> m ()
+tell1 a = tell [a]
 
 data Message a b =
   AEReq (AppendEntriesReq a)
@@ -88,12 +94,11 @@ handleAppendEntriesReq from to r = do
   electionTimer .= 0
   updatedTerm <- use serverTerm
   lastLog <- last <$> use entryLog
-  tell [AERes AppendEntriesRes { _from = to
-                               , _to = from
-                               , _term = updatedTerm
-                               , _success = success
-                               , _logIndex = lastLog^.index
-                               }]
+  tell1 $ AERes AppendEntriesRes { _from = to
+                                 , _to = from
+                                 , _term = updatedTerm
+                                 , _success = success
+                                 , _logIndex = lastLog^.index }
 
 checkForNewTerm :: MonadLogger m => Term -> ServerT a b m ()
 checkForNewTerm rpcTerm = do
@@ -130,7 +135,7 @@ handleRequestVoteReq from to r = do
   voteGranted <- handleRequestVote r
   updatedTerm <- use serverTerm
   logInfoN (T.pack $ "Sending RequestVoteRes from " ++ show from ++ " to " ++ show to)
-  tell [RVRes RequestVoteRes { _from = to , _to = from , _voterTerm = updatedTerm , _requestVoteSuccess = voteGranted }]
+  tell1 $ RVRes RequestVoteRes { _from = to , _to = from , _voterTerm = updatedTerm , _requestVoteSuccess = voteGranted }
 
 handleRequestVoteRes :: MonadLogger m => ServerId -> ServerId -> RequestVoteRes -> ServerT a b m ()
 handleRequestVoteRes from to r = do
@@ -171,12 +176,14 @@ handleClientRequest r = do
       --  - forward it to leader verbatim
       --  - send error response to client with address of leader, let client
       --    make the request again
+      logInfoN "received client request. should redirect to leader but will just fail it for now."
+      tell1 $ CRes ClientRes { _responsePayload = Left "invalid request: node is not leader"
+                             , _responseId = reqId }
       pure ()
     (_, Nothing) -> do
       logInfoN "received client request but unable to identify leader: failing request"
-      tell [CRes ClientRes { _responsePayload = Left "invalid request: node is not leader"
-                           , _responseId = reqId
-                           } ]
+      tell1 $ CRes ClientRes { _responsePayload = Left "invalid request: node is not leader"
+                             , _responseId = reqId }
       pure ()
 
 -- reply false if term < currentTerm
@@ -356,7 +363,7 @@ sendAppendEntries followerId logIndex = do
   let entry = log !! fromInteger logIndex
       prevEntry = log !! fromInteger (logIndex - 1)
       req = AEReq $ mkAppendEntries state followerId prevEntry [entry]
-  tell [req]
+  tell1 req
   heartbeatTimer .= 0
 
 -- if there exists an N such that N > commitIndex, a majority of matchIndex[i]
@@ -399,9 +406,7 @@ applyCommittedLogEntries = do
     let entry = fromJust $ findByIndex log lastApplied'
     logInfoN (T.pack $ "applying entry " ++ show (entry^.index))
     res <- (lift . lift) $ apply (entry^.command)
-    tell [CRes ClientRes { _responsePayload = Right res
-                         , _responseId = entry^.requestId
-                         }]
+    tell1 $ CRes ClientRes { _responsePayload = Right res , _responseId = entry^.requestId }
 
 mkAppendEntries :: ServerState a b m -> ServerId -> LogEntry a -> [LogEntry a] -> AppendEntriesReq a
 mkAppendEntries s to prevEntry newEntries =
