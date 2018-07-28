@@ -60,3 +60,27 @@ state machine commands and return values, respectively.
 - Log compaction
 - Linearizability
 - Performance tests
+
+# Try it out
+
+Start three nodes, each in their own shell:
+```shell
+stack exec http server 1
+stack exec http server 2
+stack exec http server 3
+```
+
+Send a request to node 1 (which is probably the leader):
+```shell
+stack exec http client 1 get
+```
+
+Set a value on the state machine
+```shell
+stack exec http client 1 set 5
+```
+
+Read it back
+```shell
+stack exec http client 1 get
+```
