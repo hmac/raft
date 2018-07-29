@@ -24,23 +24,31 @@ apply :: Command -> StateMachineM ()
 apply NoOp    = pure ()
 apply (Set i) = put StateMachine { value = i }
 
+sid1 :: ServerId
+sid1 = ServerId "1"
+
+sid2 :: ServerId
+sid2 = ServerId "2"
+
+sid3 :: ServerId
+sid3 = ServerId "3"
+
 main :: IO ()
 main = do
-  let s0 :: (ServerState Command () StateMachineM, StateMachine)
-      s0 = mkServer 0 [1, 2] (30, 30, 0) 20 apply
-      s1 = mkServer 1 [0, 2] (40, 40, 0) 20 apply
-      s2 = mkServer 2 [0, 1] (50, 50, 0) 20 apply
-      servers = Map.fromList [(0, s0), (1, s1), (2, s2)]
+  let s1 = mkServer sid1 [sid2, sid3] (30, 30, 0) 20 apply
+      s2 = mkServer sid2 [sid1, sid3] (40, 40, 0) 20 apply
+      s3 = mkServer sid3 [sid1, sid2] (50, 50, 0) 20 apply
+      servers = Map.fromList [(sid1, s1), (sid2, s2), (sid3, s3)]
   testLoop servers mkClient
 
 type Client = [(Integer, ServerId, Message Command Response)]
 
 mkClient :: Client
-mkClient = [(500, 0, CReq ClientReq { _requestPayload = Set 42, _clientRequestId = 0})
-           , (1000, 0, CReq ClientReq { _requestPayload = Set 43, _clientRequestId = 1 })
-           , (1500, 0, CReq ClientReq { _requestPayload = Set 7, _clientRequestId = 2 })
-           , (1521, 1, Tick)
-           , (1521, 2, Tick)] -- wait for the followers to apply their logs
+mkClient = [(500, sid1, CReq ClientReq { _requestPayload = Set 42, _clientRequestId = 0})
+           , (1000, sid1, CReq ClientReq { _requestPayload = Set 43, _clientRequestId = 1 })
+           , (1500, sid1, CReq ClientReq { _requestPayload = Set 7, _clientRequestId = 2 })
+           , (1521, sid2, Tick)
+           , (1521, sid3, Tick)] -- wait for the followers to apply their logs
 
 testLoop ::
      Map.HashMap ServerId (ServerState Command () StateMachineM, StateMachine) -> Client -> IO ()

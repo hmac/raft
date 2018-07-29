@@ -14,16 +14,16 @@ import           Raft.Server         (ServerId (..))
 
 runClient :: [String] -> IO ()
 runClient args = do
-  let (serverId, cmd) =
-        case args of
-          [sid, "get"]    -> (ServerId (read sid), Get)
-          [sid, "set", n] -> (ServerId (read sid), Set (read n))
-      req reqId = ClientReq { _requestPayload = cmd, _clientRequestId = reqId }
   reqId <- RequestId <$> randomIO
+  let serverUrl = head args
+      cmd = case args of
+          [_, "get"]    -> Get
+          [_, "set", n] -> Set (read n)
+      req = ClientReq { _requestPayload = cmd, _clientRequestId = reqId }
   manager <- newManager defaultManagerSettings
-  let url = fromMaybe (error "no address found") (lookup serverId serverAddrs)
-      env = ClientEnv { manager = manager, baseUrl = url, cookieJar = Nothing }
-  res <- runClientM (sendClientRequest (req reqId)) env
+  url <- parseBaseUrl serverUrl
+  let env = ClientEnv { manager = manager, baseUrl = url, cookieJar = Nothing }
+  res <- runClientM (sendClientRequest req) env
   case res of
     Left err -> print err
     Right ClientRes { _responsePayload = p } -> case p of
@@ -31,8 +31,9 @@ runClient args = do
                                                   Right r  -> print r
 
 -- N.B: also duplicated in Server.hs
-serverAddrs :: [(ServerId, BaseUrl)]
-serverAddrs =  [(1, BaseUrl Http "localhost" 10501 "")
-              , (2, BaseUrl Http "localhost" 10502 "")
-              , (3, BaseUrl Http "localhost" 10503 "")]
+serverAddrs :: [ServerId]
+serverAddrs = [ ServerId "http://localhost:10501"
+              , ServerId "http://localhost:10502"
+              , ServerId "http://localhost:10503"
+              ]
 

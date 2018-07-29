@@ -98,9 +98,9 @@ app config = serve raftAPI (server config)
 -- TODO: load the log from persistent storage and pass to mkServer
 runServer :: [String] -> IO ()
 runServer args = do
-  let self = ServerId (read (head args))
-      url = fromJust $ Map.lookup self serverAddrs
-      others = filter (/= self) (Map.keys serverAddrs)
+  selfUrl <- parseBaseUrl (head args)
+  let self = (ServerId . showBaseUrl) selfUrl
+      others = filter (/= self) serverAddrs
   seed <- getStdRandom random
   serverState <- newMVar $ mkServer self others (150, 300, seed) 20 -- Raft recommends a 150-300ms range for election timeouts
   queue <- newChan
@@ -112,7 +112,7 @@ runServer args = do
     runLogger (processTick config)
   manager <- newManager defaultManagerSettings
   _ <- forkForever $ runLogger (deliverMessages config manager)
-  run (baseUrlPort url) (app config)
+  run (baseUrlPort selfUrl) (app config)
 
 runLogger :: LoggingT IO a -> IO a
 runLogger = runStderrLoggingT
@@ -123,9 +123,24 @@ forkForever = forkIO . forever
 deliverMessages :: Config -> Manager -> LoggingT IO ()
 deliverMessages config manager = do
   m <- liftIO $ readChan (queue config)
-  let url = fromJust $ Map.lookup (rpcTo m) serverAddrs
-      env = ClientEnv { manager = manager, baseUrl = url, cookieJar = Nothing }
-  sendRpc m env config
+  case m of
+    Raft.CRes r -> sendClientResponse config r
+    _ -> do
+      url <- (parseBaseUrl . unServerId . rpcTo) m
+      let env = ClientEnv { manager = manager, baseUrl = url, cookieJar = Nothing }
+      sendRpc m env config
+
+sendClientResponse :: Config -> Rpc.ClientRes CommandResponse -> LoggingT IO ()
+sendClientResponse config r = do
+  -- we need to find the originating request and place it in the
+  -- corresponding MVar in config.requests
+  let reqId = r^.responseId
+  logDebugN "Processing client response"
+  reqs <- liftIO $ readMVar (requests config)
+  case Map.lookup reqId reqs of
+    -- assume that the request was made to a different node
+    Nothing     -> logInfoN $ T.pack $ "Ignoring client request [" ++ show (unRequestId reqId) ++ "] - not present in map"
+    Just resVar -> liftIO $ putMVar resVar (toRaftMessage r)
 
 -- TODO: if RPC cannot be delivered, enqueue it for retry
 sendRpc :: Message -> ClientEnv -> Config -> LoggingT IO ()
@@ -156,24 +171,14 @@ sendRpc rpc env config =
       case res of
         Left err -> logDebugN "Error sending AppendEntriesRes RPC"
         Right () -> pure ()
-    Raft.CRes r -> do
-      -- if we get a client response, we need to find the request that it
-      -- originated from and place it in the corresponding MVar in
-      -- config.requests
-      let reqId = r^.responseId
-      logDebugN "Processing client response"
-      reqs <- liftIO $ readMVar (requests config)
-      case Map.lookup reqId reqs of
-        -- assume that the request was made to a different node
-        Nothing     -> logInfoN $ T.pack $ "Ignoring client request [" ++ show (unRequestId reqId) ++ "] - not present in map"
-        Just resVar -> liftIO $ putMVar resVar (toRaftMessage r)
     r -> error $ "Unexpected rpc: " ++ show r
   where run rpc env = liftIO $ runClientM rpc env
 
-serverAddrs :: Map.Map ServerId BaseUrl
-serverAddrs = Map.fromList [(1, BaseUrl Http "localhost" 10501 "")
-                          , (2, BaseUrl Http "localhost" 10502 "")
-                          , (3, BaseUrl Http "localhost" 10503 "")]
+serverAddrs :: [ServerId]
+serverAddrs = [ ServerId "http://localhost:10501"
+              , ServerId "http://localhost:10502"
+              , ServerId "http://localhost:10503"
+              ]
 
 mkServer ::
   Monad m =>
