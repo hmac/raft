@@ -60,6 +60,7 @@ executables:
     - warp
     - http-client
     - time
+    - optparse-applicative
 
 tests:
   integration:

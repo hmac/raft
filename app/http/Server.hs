@@ -96,9 +96,9 @@ app :: Config -> Application
 app config = serve raftAPI (server config)
 
 -- TODO: load the log from persistent storage and pass to mkServer
-runServer :: [String] -> IO ()
-runServer args = do
-  selfUrl <- parseBaseUrl (head args)
+runServer :: String -> IO ()
+runServer url = do
+  selfUrl <- parseBaseUrl url
   let self = (ServerId . showBaseUrl) selfUrl
       others = filter (/= self) serverAddrs
   seed <- getStdRandom random
