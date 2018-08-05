@@ -63,24 +63,26 @@ state machine commands and return values, respectively.
 
 # Try it out
 
-Start three nodes, each in their own shell:
+You'll need [Stack](haskellstack.org) installed.
+
+Build the project
 ```shell
-stack exec http server 1
-stack exec http server 2
-stack exec http server 3
+stack build
 ```
 
-Send a request to node 1 (which is probably the leader):
+Start three nodes, each in their own shell:
 ```shell
-stack exec http client 1 get
+stack exec http server localhost:10501
+stack exec http server localhost:10502
+stack exec http server localhost:10503
 ```
 
 Set a value on the state machine
 ```shell
-stack exec http client 1 set 5
+stack exec http client localhost:10501 set 5
 ```
 
 Read it back
 ```shell
-stack exec http client 1 get
+stack exec http client localhost:10501 get
 ```
