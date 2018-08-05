@@ -24,8 +24,15 @@ runClient serverUrl cmd = do
   case res of
     Left (ConnectionError e)                        -> T.putStrLn e
     Left err                                        -> print err
-    Right ClientResFailure { _responseError = err } -> T.putStrLn err
     Right ClientResSuccess { _responsePayload = p } -> print p
+    Right ClientResFailure { _responseError = err, _leader = ml } -> do
+      T.putStrLn err
+      case ml of
+        Just (ServerId l) -> do
+          putStrLn $ "Leader discovered: " ++ l ++ " - retrying request"
+          runClient l cmd
+        Nothing -> pure ()
+
 
 -- N.B: also duplicated in Server.hs
 serverAddrs :: [ServerId]
