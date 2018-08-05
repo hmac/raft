@@ -63,7 +63,7 @@ state machine commands and return values, respectively.
 
 # Try it out
 
-You'll need [Stack](haskellstack.org) installed.
+You'll need [Stack](https://haskellstack.org) installed.
 
 Build the project
 ```shell
