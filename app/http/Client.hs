@@ -22,11 +22,10 @@ runClient serverUrl cmd = do
   let env = ClientEnv { manager = manager, baseUrl = url, cookieJar = Nothing }
   res <- runClientM (sendClientRequest req) env
   case res of
-    Left (ConnectionError e) -> T.putStrLn e
-    Left err -> print err
-    Right ClientRes { _responsePayload = p } -> case p of
-                                                  Left err -> T.putStrLn err
-                                                  Right r  -> print r
+    Left (ConnectionError e)                        -> T.putStrLn e
+    Left err                                        -> print err
+    Right ClientResFailure { _responseError = err } -> T.putStrLn err
+    Right ClientResSuccess { _responsePayload = p } -> print p
 
 -- N.B: also duplicated in Server.hs
 serverAddrs :: [ServerId]

@@ -94,10 +94,13 @@ instance Binary a => Binary (ClientReq a)
 deriving instance (Show a) => Show (ClientReq a)
 deriving instance (Eq a) => Eq (ClientReq a)
 
-data ClientRes b = ClientRes
-  { _responsePayload :: Either T.Text b
-  , _responseId      :: RequestId
-  } deriving (Generic)
+data ClientRes b
+  = ClientResSuccess { _responsePayload :: Either T.Text b
+                     , _responseId      :: RequestId }
+  | ClientResFailure { _responseError :: T.Text
+                     , _responseId    :: RequestId
+                     , _leader        :: Maybe ServerId }
+  deriving (Generic)
 
 instance Binary b => Binary (ClientRes b)
 deriving instance (Show b) => Show (ClientRes b)

@@ -170,20 +170,11 @@ handleClientRequest r = do
       -- broadcast this new entry to followers
       serverIds <- use serverIds
       mapM_ (`sendAppendEntries` nextIndex) serverIds
-    (_, Just leader) -> do
-      -- TODO: redirect request to leader
-      -- either:
-      --  - forward it to leader verbatim
-      --  - send error response to client with address of leader, let client
-      --    make the request again
-      logInfoN "received client request. should redirect to leader but will just fail it for now."
-      tell1 $ CRes ClientRes { _responsePayload = Left "invalid request: node is not leader"
-                             , _responseId = reqId }
-      pure ()
-    (_, Nothing) -> do
-      logInfoN "received client request but unable to identify leader: failing request"
-      tell1 $ CRes ClientRes { _responsePayload = Left "invalid request: node is not leader"
-                             , _responseId = reqId }
+    (_, mLeader) -> do
+      tell1 $ CRes
+        ClientResFailure { _responseError = "Node is not leader"
+                         , _responseId = reqId
+                         , _leader = mLeader }
       pure ()
 
 -- reply false if term < currentTerm
@@ -400,13 +391,13 @@ applyCommittedLogEntries = do
   lastCommittedIndex <- use commitIndex
   log <- use entryLog
   self <- use selfId
-  pure ()
   when (lastCommittedIndex > lastAppliedIndex) $ do
     lastApplied' <- lastApplied <+= 1
     let entry = fromJust $ findByIndex log lastApplied'
     logInfoN (T.pack $ "applying entry " ++ show (entry^.index))
     res <- (lift . lift) $ apply (entry^.command)
-    tell1 $ CRes ClientRes { _responsePayload = Right res , _responseId = entry^.requestId }
+    tell1 $ CRes
+      ClientResSuccess {_responsePayload = Right res, _responseId = entry ^. requestId}
 
 mkAppendEntries :: ServerState a b m -> ServerId -> LogEntry a -> [LogEntry a] -> AppendEntriesReq a
 mkAppendEntries s to prevEntry newEntries =
