@@ -44,11 +44,11 @@ main = do
 type Client = [(Integer, ServerId, Message Command Response)]
 
 mkClient :: Client
-mkClient = [(500, sid1, CReq ClientReq { _requestPayload = Set 42, _clientRequestId = 0})
-           , (1000, sid1, CReq ClientReq { _requestPayload = Set 43, _clientRequestId = 1 })
-           , (1500, sid1, CReq ClientReq { _requestPayload = Set 7, _clientRequestId = 2 })
-           , (1521, sid2, Tick)
-           , (1521, sid3, Tick)] -- wait for the followers to apply their logs
+mkClient = [(100, sid1, CReq ClientReq { _requestPayload = Set 42, _clientRequestId = 0})
+           , (200, sid1, CReq ClientReq { _requestPayload = Set 43, _clientRequestId = 1 })
+           , (300, sid1, CReq ClientReq { _requestPayload = Set 7, _clientRequestId = 2 })
+           , (321, sid2, Tick)
+           , (321, sid3, Tick)] -- wait for the followers to apply their logs
 
 testLoop ::
      Map.HashMap ServerId (ServerState Command () StateMachineM, StateMachine) -> Client -> IO ()
