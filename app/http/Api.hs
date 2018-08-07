@@ -9,6 +9,8 @@ module Api where
 
 import           Control.Monad.State.Strict
 import           Data.Aeson                 (FromJSON, ToJSON)
+import           Data.HashMap.Strict        (HashMap)
+import qualified Data.HashMap.Strict        as HM
 import           GHC.Generics
 import           Servant
 import           Servant.Client             (client)
@@ -22,19 +24,30 @@ import           Raft.Server                (MonotonicCounter (..), ServerId,
                                              mkServerState)
 
 -- State machine
-newtype StateMachine = StateMachine { value :: Int } deriving (Eq, Show)
+newtype StateMachine = StateMachine (HM.HashMap String String) deriving (Eq, Show)
 type StateMachineT m = StateT StateMachine m
 
 -- A command set for the state machine
 -- TODO: could we combine these into a single Free Monad?
-data Command = NoOp | Get | Set Int deriving (Eq, Show, Generic, FromJSON, ToJSON)
-data CommandResponse = CRRead Int | CRUnit deriving (Eq, Show, Generic, FromJSON, ToJSON)
+data Command
+  = NoOp
+  | Get String
+  | Set String String
+  deriving (Eq, Show, Generic, FromJSON, ToJSON)
+data CommandResponse
+  = CRRead (Maybe String)
+  | CRUnit
+  deriving (Eq, Show, Generic, FromJSON, ToJSON)
 
 -- This is how Raft will apply changes to our state machine
 apply :: Monad m => Command -> StateMachineT m CommandResponse
-apply NoOp    = pure CRUnit
-apply Get     = CRRead <$> gets value
-apply (Set n) = modify' (\s -> s { value = n }) >> pure (CRRead n)
+apply NoOp = pure CRUnit
+apply (Get key) = do
+  StateMachine m <- get
+  (pure . CRRead) $ HM.lookup key m
+apply (Set k v) = do
+  modify' $ \(StateMachine m) -> StateMachine (HM.insert k v m)
+  (pure . CRRead) $ Just v
 
 type Message = Raft.Message Command CommandResponse
 

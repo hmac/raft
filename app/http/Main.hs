@@ -30,5 +30,5 @@ clientOptions = info (ClientOpts <$> strArgument (metavar "[hostname]") <*> clie
 
 clientCmd = hsubparser $ command "set" (info set (fullDesc <> progDesc "set a value"))
                       <> command "get" (info get (fullDesc <> progDesc "get a value"))
-  where set = Set <$> argument auto (metavar "[value]")
-        get = pure Get
+  where set = Set <$> strArgument (metavar "[key]") <*> strArgument (metavar "[value]")
+        get = Get <$> strArgument (metavar "[key]")

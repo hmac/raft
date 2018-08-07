@@ -63,7 +63,9 @@ state machine commands and return values, respectively.
 
 # Try it out
 
-You'll need [Stack](https://haskellstack.org) installed.
+There's an example app that uses HTTP as the transport and a HashMap as the
+state machine.  You'll need [Stack](https://haskellstack.org) installed to run
+it.
 
 Build the project
 ```shell
@@ -79,10 +81,10 @@ stack exec http server localhost:10503
 
 Set a value on the state machine
 ```shell
-stack exec http client localhost:10501 set 5
+stack exec http client localhost:10501 set name harry
 ```
 
 Read it back
 ```shell
-stack exec http client localhost:10501 get
+stack exec http client localhost:10501 get name
 ```

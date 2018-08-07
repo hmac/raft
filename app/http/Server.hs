@@ -188,7 +188,7 @@ mkServer ::
   -> MonotonicCounter
   -> (ServerState Command CommandResponse (StateMachineT m), StateMachine)
 mkServer self others electionTimeout heartbeatTimeout =
-  (serverState, StateMachine {value = 0})
+  (serverState, StateMachine mempty)
   where
     serverState =
       mkServerState self others electionTimeout heartbeatTimeout NoOp apply
