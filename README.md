@@ -19,13 +19,13 @@ passing it a `Message` via `handleMessage`.
 The `Message` type is as follows
 ```haskell
 data Message a b =
-  AEReq (AppendEntriesReq a)
-    | AERes AppendEntriesRes
-    | RVReq RequestVoteReq
-    | RVRes RequestVoteRes
-    | CReq (ClientReq a)
-    | CRes (ClientRes b)
-    | Tick
+    AEReq (AppendEntriesReq a)
+  | AERes AppendEntriesRes
+  | RVReq RequestVoteReq
+  | RVRes RequestVoteRes
+  | CReq (ClientReq a)
+  | CRes (ClientRes b)
+  | Tick
 ```
 
 That is, an ADT with a variant for each RPC request and response, client
