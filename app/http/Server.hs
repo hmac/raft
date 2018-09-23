@@ -1,11 +1,13 @@
 {-# LANGUAGE NamedFieldPuns    #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DeriveGeneric #-}
 
 module Server (runServer) where
 
 import           Control.Concurrent
 import           Control.Monad.Logger
 import           Control.Monad.State.Strict hiding (state)
+import           Data.List                  (find)
 import           Data.Map.Strict            (Map)
 import qualified Data.Map.Strict            as Map
 import           Data.Maybe                 (fromJust)
@@ -30,6 +32,7 @@ import           Raft.Server                (MonotonicCounter (..), ServerId,
                                              mkServerState)
 
 import           Api
+import Config
 
 type StateMachineM = StateMachineT (LoggingT IO)
 type RaftServer = ServerState Command CommandResponse (StateMachineT (LoggingT IO))
@@ -95,14 +98,12 @@ serveClientRequest config req = liftIO $ runLogger $ do
 app :: Config -> Application
 app config = serve raftAPI (server config)
 
--- TODO: load the log from persistent storage and pass to mkServer
-runServer :: String -> IO ()
-runServer url = do
-  selfUrl <- parseBaseUrl url
-  let self = (ServerId . showBaseUrl) selfUrl
-      others = filter (/= self) serverAddrs
+runServer :: String -> ClusterConfig -> IO ()
+runServer selfName config = do
+  let (selfId, others) = identifySelf selfName config
+  selfUrl <- parseBaseUrl (unServerId selfId)
   seed <- getStdRandom random
-  serverState <- newMVar $ mkServer self others (150, 300, seed) 20 -- Raft recommends a 150-300ms range for election timeouts
+  serverState <- newMVar $ mkServer selfId others (150, 300, seed) 20 -- Raft recommends a 150-300ms range for election timeouts
   queue <- newChan
   reqMap <- newMVar Map.empty
   let config = Config { state = serverState, queue = queue, apply_ = apply, requests = reqMap }
@@ -174,11 +175,15 @@ sendRpc rpc env config =
     r -> error $ "Unexpected rpc: " ++ show r
   where run rpc env = liftIO $ runClientM rpc env
 
-serverAddrs :: [ServerId]
-serverAddrs = [ ServerId "http://localhost:10501"
-              , ServerId "http://localhost:10502"
-              , ServerId "http://localhost:10503"
-              ]
+identifySelf :: String -> ClusterConfig -> (ServerId, [ServerId])
+identifySelf selfName (ClusterConfig nodes) =
+  let mself = find ((== selfName) . name) nodes
+  in case mself of
+    Nothing -> error $ "Unrecognised node name: " ++ selfName
+    Just self ->
+      let selfId = ServerId (address self)
+          others = map (ServerId . address) $ filter ((/= selfName) . name) nodes
+       in (selfId, others)
 
 mkServer ::
   Monad m =>

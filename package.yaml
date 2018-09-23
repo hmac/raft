@@ -53,6 +53,7 @@ executables:
     - http-client
     - time
     - optparse-applicative
+    - dhall
 
 tests:
   integration:
