@@ -3,13 +3,13 @@
 
 module Server (runServer) where
 
-import           Control.Concurrent (Chan, MVar, ThreadId, newEmptyMVar, putMVar,
-                                     readMVar, takeMVar, threadDelay, writeList2Chan,
-                                     modifyMVar_, newMVar, newChan, forkIO, readChan)
-import Control.Concurrent.STM.TMVar (TMVar, takeTMVar, putTMVar, readTMVar, newEmptyTMVar)
-import Control.Concurrent.STM.TVar (TVar, newTVar, writeTVar, readTVar)
-import Control.Concurrent.STM.TChan (TChan, newTChan, writeTChan, readTChan)
-import Control.Monad.STM (STM, atomically, retry)
+import           Control.Concurrent           (ThreadId, forkIO, threadDelay)
+import           Control.Concurrent.STM.TChan (TChan, newTChan, readTChan,
+                                               writeTChan)
+import           Control.Concurrent.STM.TVar  (TVar, newTVar, readTVar,
+                                               readTVarIO, writeTVar)
+import           Control.Monad.STM            (STM, atomically, retry)
+
 import           Control.Monad.Logger
 import           Control.Monad.State.Strict hiding (state)
 import           Data.List                  (find)
@@ -37,7 +37,7 @@ import           Raft.Server                (MonotonicCounter (..), ServerId,
                                              mkServerState)
 
 import           Api
-import Config
+import           Config
 
 type StateMachineM = StateMachineT (LoggingT IO)
 type RaftServer = ServerState Command CommandResponse (StateMachineT (WriterLoggingT STM))
@@ -45,13 +45,13 @@ type RaftServer = ServerState Command CommandResponse (StateMachineT (WriterLogg
 data Config = Config { state    :: TVar (RaftServer, StateMachine)
                      , queue    :: TChan Message
                      , apply_   :: Command -> StateMachineM CommandResponse
-                     , requests :: TVar (Map RequestId (Maybe Message))
+                     , requests :: TVar (Map RequestId Message)
                      }
 
 logState :: Config -> LoggingT IO ()
 logState Config { state } = do
   liftIO $ threadDelay 2000000
-  (ServerState { _role, _serverTerm, _nextIndex, _matchIndex }, m) <- (liftIO . atomically) $ readTVar state
+  (ServerState { _role, _serverTerm, _nextIndex, _matchIndex }, m) <- liftIO $ readTVarIO state
   (logInfoN . T.pack . show) (_role, _serverTerm, _nextIndex, m)
 
 -- Apply a Raft message to the state
@@ -89,20 +89,15 @@ serveClientRequest :: Config -> Rpc.ClientReq Command -> Handler (Rpc.ClientRes 
 serveClientRequest config req = liftIO $ runLogger $ do
   let reqId = req^.clientRequestId
       reqMapVar = requests config
-  -- insert this request into the request map
-  liftIO . atomically $ do
-    reqMap <- readTVar reqMapVar
-    let reqMap' = Map.insert reqId Nothing reqMap
-    writeTVar reqMapVar reqMap'
   logInfoN "Processing client request"
   processMessage config (toRaftMessage req)
   logInfoN "Waiting for response to request"
+  -- Check the map to see if the response has been placed in it. If it hasn't, retry.
   resp <- liftIO . atomically $ do
     reqMap <- readTVar reqMapVar
     case Map.lookup reqId reqMap of
-      Just (Just resp) -> do
-        let reqMap' = Map.delete reqId reqMap
-        writeTVar reqMapVar reqMap'
+      Just resp -> do
+        writeTVar reqMapVar (Map.delete reqId reqMap)
         pure resp
       _ -> retry
   logInfoN "Response found"
@@ -151,14 +146,13 @@ deliverMessages config manager = do
 
 sendClientResponse :: Config -> Rpc.ClientRes CommandResponse -> LoggingT IO ()
 sendClientResponse config r = do
-  -- we need to find the originating request and place it in the
-  -- corresponding MVar in config.requests
+  -- insert the response into the request map, using the original request ID
   let reqId = r^.responseId
+      reqMapVar = requests config
   logDebugN "Processing client response"
   liftIO . atomically $ do
-    reqs <- readTVar (requests config)
-    let reqs' = Map.insert reqId (Just (toRaftMessage r)) reqs
-    writeTVar (requests config) reqs'
+    reqs <- readTVar reqMapVar
+    writeTVar reqMapVar (Map.insert reqId (toRaftMessage r) reqs)
 
 -- TODO: if RPC cannot be delivered, enqueue it for retry
 sendRpc :: Message -> ClientEnv -> Config -> LoggingT IO ()
