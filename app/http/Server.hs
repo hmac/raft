@@ -45,7 +45,7 @@ type RaftServer = ServerState Command CommandResponse (StateMachineT (WriterLogg
 data Config = Config { state    :: TVar (RaftServer, StateMachine)
                      , queue    :: TChan Message
                      , apply_   :: Command -> StateMachineM CommandResponse
-                     , requests :: MVar (Map RequestId (TMVar Message))
+                     , requests :: TVar (Map RequestId (TMVar Message))
                      }
 
 logState :: Config -> LoggingT IO ()
@@ -91,14 +91,20 @@ serveClientRequest config req = liftIO $ runLogger $ do
       reqMapVar = requests config
   -- insert this request into the request map
   var <- (liftIO . atomically) newEmptyTMVar
-  liftIO $ modifyMVar_ reqMapVar (pure . Map.insert reqId var)
+  liftIO . atomically $ do
+    reqMap <- readTVar reqMapVar
+    let reqMap' = Map.insert reqId var reqMap
+    writeTVar reqMapVar reqMap'
   logInfoN "Processing client request"
   processMessage config (toRaftMessage req)
   logInfoN "Waiting for response to request"
-  resp <- liftIO . atomically $ readTMVar var -- we'll block here until the response is ready
-  -- now we have the response, clear it from the request map
+  resp <- liftIO . atomically $ do
+    resp <- readTMVar var
+    reqMap <- readTVar reqMapVar
+    let reqMap' = Map.delete reqId reqMap
+    writeTVar reqMapVar reqMap'
+    pure resp
   logInfoN "Response found"
-  liftIO $ modifyMVar_ reqMapVar (pure . Map.delete reqId)
   case fromRaftMessage resp of
     Nothing -> error "could not decode client response"
     Just r  -> pure r
@@ -111,12 +117,12 @@ runServer selfName config = do
   let (selfId, others) = identifySelf selfName config
   selfUrl <- parseBaseUrl (unServerId selfId)
   seed <- getStdRandom random
-  (serverState, queue) <- atomically $ do
+  (serverState, queue, reqMap) <- atomically $ do
     -- Raft recommends a 150-300ms range for election timeouts
     s <- newTVar $ mkServer selfId others (150, 300, seed) 20
     q <- newTChan
-    pure (s, q)
-  reqMap <- newMVar Map.empty
+    m <- newTVar Map.empty
+    pure (s, q, m)
   let config = Config { state = serverState, queue = queue, apply_ = apply, requests = reqMap }
   _ <- forkForever $  runLogger (logState config)
   _ <- forkForever $ do
@@ -148,11 +154,13 @@ sendClientResponse config r = do
   -- corresponding MVar in config.requests
   let reqId = r^.responseId
   logDebugN "Processing client response"
-  reqs <- liftIO $ readMVar (requests config)
-  case Map.lookup reqId reqs of
-    -- assume that the request was made to a different node
-    Nothing     -> logInfoN $ T.pack $ "Ignoring client request [" ++ show (unRequestId reqId) ++ "] - not present in map"
-    Just resVar -> liftIO . atomically $ putTMVar resVar (toRaftMessage r)
+  foundReq <- liftIO . atomically $ do
+    reqs <- readTVar (requests config)
+    case Map.lookup reqId reqs of
+      Nothing -> pure False
+      Just resVar -> putTMVar resVar (toRaftMessage r) >> pure True
+  when foundReq $
+    logInfoN . T.pack $ "Ignoring client request [" ++ show (unRequestId reqId) ++ "] - not present in map"
 
 -- TODO: if RPC cannot be delivered, enqueue it for retry
 sendRpc :: Message -> ClientEnv -> Config -> LoggingT IO ()
