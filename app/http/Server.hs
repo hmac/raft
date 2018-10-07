@@ -6,7 +6,7 @@ module Server (runServer) where
 import           Control.Concurrent (Chan, MVar, ThreadId, newEmptyMVar, putMVar,
                                      readMVar, takeMVar, threadDelay, writeList2Chan,
                                      modifyMVar_, newMVar, newChan, forkIO, readChan)
-import Control.Concurrent.STM.TMVar (TMVar, newTMVar, takeTMVar, putTMVar, readTMVar)
+import Control.Concurrent.STM.TMVar (TMVar, takeTMVar, putTMVar, readTMVar, newEmptyTMVar)
 import Control.Concurrent.STM.TVar (TVar, newTVar, writeTVar, readTVar)
 import Control.Concurrent.STM.TChan (TChan, newTChan, writeTChan, readTChan)
 import Control.Monad.STM (STM, atomically)
@@ -45,7 +45,7 @@ type RaftServer = ServerState Command CommandResponse (StateMachineT (WriterLogg
 data Config = Config { state    :: TVar (RaftServer, StateMachine)
                      , queue    :: TChan Message
                      , apply_   :: Command -> StateMachineM CommandResponse
-                     , requests :: MVar (Map RequestId (MVar Message))
+                     , requests :: MVar (Map RequestId (TMVar Message))
                      }
 
 logState :: Config -> LoggingT IO ()
@@ -90,12 +90,12 @@ serveClientRequest config req = liftIO $ runLogger $ do
   let reqId = req^.clientRequestId
       reqMapVar = requests config
   -- insert this request into the request map
-  var <- liftIO newEmptyMVar
+  var <- (liftIO . atomically) newEmptyTMVar
   liftIO $ modifyMVar_ reqMapVar (pure . Map.insert reqId var)
   logInfoN "Processing client request"
   processMessage config (toRaftMessage req)
   logInfoN "Waiting for response to request"
-  resp <- liftIO $ readMVar var -- we'll block here until the response is ready
+  resp <- liftIO . atomically $ readTMVar var -- we'll block here until the response is ready
   -- now we have the response, clear it from the request map
   logInfoN "Response found"
   liftIO $ modifyMVar_ reqMapVar (pure . Map.delete reqId)
@@ -152,7 +152,7 @@ sendClientResponse config r = do
   case Map.lookup reqId reqs of
     -- assume that the request was made to a different node
     Nothing     -> logInfoN $ T.pack $ "Ignoring client request [" ++ show (unRequestId reqId) ++ "] - not present in map"
-    Just resVar -> liftIO $ putMVar resVar (toRaftMessage r)
+    Just resVar -> liftIO . atomically $ putTMVar resVar (toRaftMessage r)
 
 -- TODO: if RPC cannot be delivered, enqueue it for retry
 sendRpc :: Message -> ClientEnv -> Config -> LoggingT IO ()
