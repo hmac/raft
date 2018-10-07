@@ -8,6 +8,7 @@ import           Control.Concurrent (Chan, MVar, ThreadId, newEmptyMVar, putMVar
                                      modifyMVar_, newMVar, newChan, forkIO, readChan)
 import Control.Concurrent.STM.TMVar (TMVar, newTMVar, takeTMVar, putTMVar, readTMVar)
 import Control.Concurrent.STM.TVar (TVar, newTVar, writeTVar, readTVar)
+import Control.Concurrent.STM.TChan (TChan, newTChan, writeTChan, readTChan)
 import Control.Monad.STM (STM, atomically)
 import           Control.Monad.Logger
 import           Control.Monad.State.Strict hiding (state)
@@ -42,7 +43,7 @@ type StateMachineM = StateMachineT (LoggingT IO)
 type RaftServer = ServerState Command CommandResponse (StateMachineT (WriterLoggingT STM))
 
 data Config = Config { state    :: TVar (RaftServer, StateMachine)
-                     , queue    :: Chan Message
+                     , queue    :: TChan Message
                      , apply_   :: Command -> StateMachineM CommandResponse
                      , requests :: MVar (Map RequestId (MVar Message))
                      }
@@ -56,13 +57,11 @@ logState Config { state } = do
 -- Apply a Raft message to the state
 processMessage :: Config -> Message -> LoggingT IO ()
 processMessage Config { state, queue } msg = do
-  logs <- liftIO $ do
-    (msgs, logs) <- atomically $ do
-      (s, m) <- readTVar state
-      ((msgs, s', m'), logs) <- runWriterLoggingT (handleMessage_ s m msg)
-      writeTVar state (s', m')
-      pure (msgs, logs)
-    writeList2Chan queue msgs
+  logs <- liftIO . atomically $ do
+    (s, m) <- readTVar state
+    ((msgs, s', m'), logs) <- runWriterLoggingT (handleMessage_ s m msg)
+    writeTVar state (s', m')
+    mapM_ (writeTChan queue) msgs
     pure logs
   mapM_ (\(loc, src, lvl, m) -> monadLoggerLog loc src lvl m) logs
   where
@@ -112,8 +111,11 @@ runServer selfName config = do
   let (selfId, others) = identifySelf selfName config
   selfUrl <- parseBaseUrl (unServerId selfId)
   seed <- getStdRandom random
-  serverState <- atomically $ newTVar $ mkServer selfId others (150, 300, seed) 20 -- Raft recommends a 150-300ms range for election timeouts
-  queue <- newChan
+  (serverState, queue) <- atomically $ do
+    -- Raft recommends a 150-300ms range for election timeouts
+    s <- newTVar $ mkServer selfId others (150, 300, seed) 20
+    q <- newTChan
+    pure (s, q)
   reqMap <- newMVar Map.empty
   let config = Config { state = serverState, queue = queue, apply_ = apply, requests = reqMap }
   _ <- forkForever $  runLogger (logState config)
@@ -132,7 +134,7 @@ forkForever = forkIO . forever
 
 deliverMessages :: Config -> Manager -> LoggingT IO ()
 deliverMessages config manager = do
-  m <- liftIO $ readChan (queue config)
+  m <- (liftIO . atomically) $ readTChan (queue config)
   case m of
     Raft.CRes r -> sendClientResponse config r
     _ -> do
