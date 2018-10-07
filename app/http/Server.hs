@@ -1,10 +1,14 @@
 {-# LANGUAGE NamedFieldPuns    #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE DeriveGeneric #-}
 
 module Server (runServer) where
 
-import           Control.Concurrent
+import           Control.Concurrent (Chan, MVar, ThreadId, newEmptyMVar, putMVar,
+                                     readMVar, takeMVar, threadDelay, writeList2Chan,
+                                     modifyMVar_, newMVar, newChan, forkIO, readChan)
+import Control.Concurrent.STM.TMVar (TMVar, newTMVar, takeTMVar, putTMVar, readTMVar)
+import Control.Concurrent.STM.TVar (TVar, newTVar, writeTVar, readTVar)
+import Control.Monad.STM (STM, atomically)
 import           Control.Monad.Logger
 import           Control.Monad.State.Strict hiding (state)
 import           Data.List                  (find)
@@ -35,9 +39,9 @@ import           Api
 import Config
 
 type StateMachineM = StateMachineT (LoggingT IO)
-type RaftServer = ServerState Command CommandResponse (StateMachineT (LoggingT IO))
+type RaftServer = ServerState Command CommandResponse (StateMachineT (WriterLoggingT STM))
 
-data Config = Config { state    :: MVar (RaftServer, StateMachine)
+data Config = Config { state    :: TVar (RaftServer, StateMachine)
                      , queue    :: Chan Message
                      , apply_   :: Command -> StateMachineM CommandResponse
                      , requests :: MVar (Map RequestId (MVar Message))
@@ -46,18 +50,23 @@ data Config = Config { state    :: MVar (RaftServer, StateMachine)
 logState :: Config -> LoggingT IO ()
 logState Config { state } = do
   liftIO $ threadDelay 2000000
-  (ServerState { _role, _serverTerm, _nextIndex, _matchIndex }, m) <- liftIO $ readMVar state
+  (ServerState { _role, _serverTerm, _nextIndex, _matchIndex }, m) <- (liftIO . atomically) $ readTVar state
   (logInfoN . T.pack . show) (_role, _serverTerm, _nextIndex, m)
 
 -- Apply a Raft message to the state
 processMessage :: Config -> Message -> LoggingT IO ()
 processMessage Config { state, queue } msg = do
-  (s, m) <- liftIO $ takeMVar state
-  (msgs, server', machine') <- handleMessage_ s m msg
-  liftIO $ putMVar state (server', machine')
-  liftIO $ writeList2Chan queue msgs
+  logs <- liftIO $ do
+    (msgs, logs) <- atomically $ do
+      (s, m) <- readTVar state
+      ((msgs, s', m'), logs) <- runWriterLoggingT (handleMessage_ s m msg)
+      writeTVar state (s', m')
+      pure (msgs, logs)
+    writeList2Chan queue msgs
+    pure logs
+  mapM_ (\(loc, src, lvl, m) -> monadLoggerLog loc src lvl m) logs
   where
-    handleMessage_ :: RaftServer -> StateMachine -> Message -> LoggingT IO ([Message], RaftServer, StateMachine)
+    handleMessage_ :: RaftServer -> StateMachine -> Message -> WriterLoggingT STM ([Message], RaftServer, StateMachine)
     handleMessage_ server machine msg = do
       ((msgs, server'), machine') <- runStateT (runStateT (Raft.handleMessage msg) server) machine
       pure (msgs, server', machine')
@@ -103,7 +112,7 @@ runServer selfName config = do
   let (selfId, others) = identifySelf selfName config
   selfUrl <- parseBaseUrl (unServerId selfId)
   seed <- getStdRandom random
-  serverState <- newMVar $ mkServer selfId others (150, 300, seed) 20 -- Raft recommends a 150-300ms range for election timeouts
+  serverState <- atomically $ newTVar $ mkServer selfId others (150, 300, seed) 20 -- Raft recommends a 150-300ms range for election timeouts
   queue <- newChan
   reqMap <- newMVar Map.empty
   let config = Config { state = serverState, queue = queue, apply_ = apply, requests = reqMap }

@@ -54,6 +54,7 @@ executables:
     - time
     - optparse-applicative
     - dhall
+    - stm
 
 tests:
   integration:
