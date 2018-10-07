@@ -59,16 +59,16 @@ processMessage :: Config -> Message -> LoggingT IO ()
 processMessage Config { state, queue } msg = do
   logs <- liftIO . atomically $ do
     (s, m) <- readTVar state
-    ((msgs, s', m'), logs) <- runWriterLoggingT (handleMessage_ s m msg)
+    (((msgs, s'), m'), logs) <- runWriterLoggingT (handleMessage_ s m msg)
     writeTVar state (s', m')
     mapM_ (writeTChan queue) msgs
     pure logs
-  mapM_ (\(loc, src, lvl, m) -> monadLoggerLog loc src lvl m) logs
+  mapM_ (uncurry4 monadLoggerLog) logs
   where
-    handleMessage_ :: RaftServer -> StateMachine -> Message -> WriterLoggingT STM ([Message], RaftServer, StateMachine)
-    handleMessage_ server machine msg = do
-      ((msgs, server'), machine') <- runStateT (runStateT (Raft.handleMessage msg) server) machine
-      pure (msgs, server', machine')
+    handleMessage_ :: RaftServer -> StateMachine -> Message -> WriterLoggingT STM (([Message], RaftServer), StateMachine)
+    handleMessage_ server machine msg = runStateT (runStateT (Raft.handleMessage msg) server) machine
+    uncurry4 :: (a -> b -> c -> d -> e) -> (a, b, c, d) -> e
+    uncurry4 f (w, x, y, z) = f w x y z
 
 processTick :: Config -> LoggingT IO ()
 processTick config = processMessage config Raft.Tick
@@ -120,7 +120,7 @@ runServer selfName config = do
     m <- newTVar Map.empty
     pure (s, q, m)
   let config = Config { state = serverState, queue = queue, apply_ = apply, requests = reqMap }
-  _ <- forkForever $  runLogger (logState config)
+  _ <- forkForever $ runLogger (logState config)
   _ <- forkForever $ do
     threadDelay 1000 -- 1ms
     runLogger (processTick config)
