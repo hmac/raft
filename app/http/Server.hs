@@ -9,7 +9,7 @@ import           Control.Concurrent (Chan, MVar, ThreadId, newEmptyMVar, putMVar
 import Control.Concurrent.STM.TMVar (TMVar, takeTMVar, putTMVar, readTMVar, newEmptyTMVar)
 import Control.Concurrent.STM.TVar (TVar, newTVar, writeTVar, readTVar)
 import Control.Concurrent.STM.TChan (TChan, newTChan, writeTChan, readTChan)
-import Control.Monad.STM (STM, atomically)
+import Control.Monad.STM (STM, atomically, retry)
 import           Control.Monad.Logger
 import           Control.Monad.State.Strict hiding (state)
 import           Data.List                  (find)
@@ -45,7 +45,7 @@ type RaftServer = ServerState Command CommandResponse (StateMachineT (WriterLogg
 data Config = Config { state    :: TVar (RaftServer, StateMachine)
                      , queue    :: TChan Message
                      , apply_   :: Command -> StateMachineM CommandResponse
-                     , requests :: TVar (Map RequestId (TMVar Message))
+                     , requests :: TVar (Map RequestId (Maybe Message))
                      }
 
 logState :: Config -> LoggingT IO ()
@@ -90,20 +90,21 @@ serveClientRequest config req = liftIO $ runLogger $ do
   let reqId = req^.clientRequestId
       reqMapVar = requests config
   -- insert this request into the request map
-  var <- (liftIO . atomically) newEmptyTMVar
   liftIO . atomically $ do
     reqMap <- readTVar reqMapVar
-    let reqMap' = Map.insert reqId var reqMap
+    let reqMap' = Map.insert reqId Nothing reqMap
     writeTVar reqMapVar reqMap'
   logInfoN "Processing client request"
   processMessage config (toRaftMessage req)
   logInfoN "Waiting for response to request"
   resp <- liftIO . atomically $ do
-    resp <- readTMVar var
     reqMap <- readTVar reqMapVar
-    let reqMap' = Map.delete reqId reqMap
-    writeTVar reqMapVar reqMap'
-    pure resp
+    case Map.lookup reqId reqMap of
+      Just (Just resp) -> do
+        let reqMap' = Map.delete reqId reqMap
+        writeTVar reqMapVar reqMap'
+        pure resp
+      _ -> retry
   logInfoN "Response found"
   case fromRaftMessage resp of
     Nothing -> error "could not decode client response"
@@ -154,13 +155,10 @@ sendClientResponse config r = do
   -- corresponding MVar in config.requests
   let reqId = r^.responseId
   logDebugN "Processing client response"
-  foundReq <- liftIO . atomically $ do
+  liftIO . atomically $ do
     reqs <- readTVar (requests config)
-    case Map.lookup reqId reqs of
-      Nothing -> pure False
-      Just resVar -> putTMVar resVar (toRaftMessage r) >> pure True
-  when foundReq $
-    logInfoN . T.pack $ "Ignoring client request [" ++ show (unRequestId reqId) ++ "] - not present in map"
+    let reqs' = Map.insert reqId (Just (toRaftMessage r)) reqs
+    writeTVar (requests config) reqs'
 
 -- TODO: if RPC cannot be delivered, enqueue it for retry
 sendRpc :: Message -> ClientEnv -> Config -> LoggingT IO ()
