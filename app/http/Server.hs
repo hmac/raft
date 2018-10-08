@@ -165,37 +165,26 @@ sendClientResponse config r = do
     Just chan -> liftIO . atomically $ writeTMChan chan r
     Nothing -> logInfoN "No response channel found - ignoring response"
 
--- TODO: if RPC cannot be delivered, enqueue it for retry
 sendRpc :: Message -> ClientEnv -> Config -> LoggingT IO ()
-sendRpc rpc env config =
-  case rpc of
-    Raft.RVReq r -> do
-      let rpc = sendRequestVoteReq r
-      res <- run rpc env
-      case res of
-        Left err -> logDebugN "Error sending RequestVoteReq RPC"
-        Right _  -> pure ()
-    Raft.AEReq r -> do
-      let rpc = sendAppendEntriesReq r
-      res <- run rpc env
-      case res of
-        Left err -> pure ()
-        -- Left err -> logDebugN "Error sending AppendEntriesReq RPC"
-        Right () -> pure ()
-    Raft.RVRes r -> do
-      let rpc = sendRequestVoteRes r
-      res <- run rpc env
-      case res of
-        Left err -> logDebugN "Error sending RequestVoteRes RPC"
-        Right _  -> pure ()
-    Raft.AERes r -> do
-      let rpc = sendAppendEntriesRes r
-      res <- run rpc env
-      case res of
-        Left err -> logDebugN "Error sending AppendEntriesRes RPC"
-        Right () -> pure ()
-    r -> error $ "Unexpected rpc: " ++ show r
-  where run rpc env = liftIO $ runClientM rpc env
+sendRpc msg env Config { queue } = do
+  let
+    (name, rpc) =
+        case msg of
+          Raft.RVReq r -> ("RequestVoteReq", sendRequestVoteReq r)
+          Raft.AEReq r -> ("AppendEntriesReq", sendAppendEntriesReq r)
+          Raft.RVRes r -> ("RequestVoteRe", sendRequestVoteRes r)
+          Raft.AERes r -> ("AppendEntriesRes", sendAppendEntriesRes r)
+          r            -> error $ "Unexpected rpc: " ++ show r
+  res <- liftIO $ runClientM rpc env
+  case res of
+    Left err -> do
+      -- We could re-enqueue the message for delivery, but for these RPCs it doesn't
+      -- really matter, as they'll be resent periodically anyway
+      --
+      -- logDebugN $ T.concat ["Error sending ", name, "RPC"]
+      -- liftIO . atomically $ writeTChan queue msg
+      pure ()
+    Right _  -> pure ()
 
 identifySelf :: String -> ClusterConfig -> (ServerId, [ServerId])
 identifySelf selfName (ClusterConfig nodes) =
