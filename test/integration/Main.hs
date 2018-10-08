@@ -24,6 +24,8 @@ newtype StateMachine = StateMachine { value :: Int }
 
 type StateMachineM = StateT StateMachine (NoLoggingT Identity)
 
+type Node = (ServerState Command () StateMachineM, StateMachine)
+
 apply :: Command -> StateMachineM ()
 apply NoOp    = pure ()
 apply (Set i) = put StateMachine { value = i }
@@ -65,7 +67,7 @@ push (Queue q) m = Queue $ sortOn (\(c, _, _) -> c) (m : q)
 pop :: Queue -> (ClientMessage, Queue)
 pop (Queue (m : q)) = (m, Queue q)
 
-testLoop :: Map.HashMap ServerId (ServerState Command () StateMachineM, StateMachine) -> Queue -> IO ()
+testLoop :: Map.HashMap ServerId Node -> Queue -> IO ()
 testLoop s = go s 0
   where
     -- no more client messages
@@ -94,49 +96,57 @@ testLoop s = go s 0
                      queue'' = foldl push queue' $ map (\m -> (clock, recipient m, m)) rest ++ redirects
                  go servers' clock queue''
 
-sendMessage :: Message Command () -> (ServerState Command () StateMachineM, StateMachine) -> ([Message Command ()], (ServerState Command () StateMachineM, StateMachine))
+sendMessage :: Message Command () -> Node -> ([Message Command ()], Node)
 sendMessage msg (s, m) =
-  let ((msgs, state'), machine') = runIdentity $
-                                   runNoLoggingT $
-                                   flip runStateT m $
-                                   flip runStateT s $
-                                   handleMessage msg
-   in (msgs, (state', machine'))
+  let ((msgs, state'), machine') =
+        runIdentity $
+        runNoLoggingT $ flip runStateT m $ flip runStateT s $ handleMessage msg
+  in (msgs, (state', machine'))
 
 isClientResponse :: Message a b -> Bool
-isClientResponse m = case m of
-                       CRes{} -> True
-                       _      -> False
+isClientResponse m =
+  case m of
+    CRes {} -> True
+    _ -> False
 
-handleClientRedirects :: Message Command Response -> Maybe (Integer, ServerId, Message Command Response)
-handleClientRedirects (CRes ClientResFailure { _leader = Just l, _responseId = i }) =
-  Just (1, l, CReq $ ClientReq { _clientRequestId = i, _requestPayload = payload })
-    where payload = request^.requestPayload
-          (CReq request) = fromJust $ find (\(CReq req) -> req^.clientRequestId == i) clientReqs
-          clientReqs = filter isClientRequest clientMessages_
-          isClientRequest (CReq _) = True
-          isClientRequest _        = False
-          clientMessages_ = map (\(_, _, x) -> x) clientMessages
+handleClientRedirects ::
+     Message Command Response
+  -> Maybe (Integer, ServerId, Message Command Response)
+handleClientRedirects (CRes ClientResFailure {_leader = Just l, _responseId = i}) =
+  Just
+    (1, l, CReq $ ClientReq {_clientRequestId = i, _requestPayload = payload})
+  where
+    payload = request ^. requestPayload
+    (CReq request) =
+      fromJust $ find (\(CReq req) -> req ^. clientRequestId == i) clientReqs
+    clientReqs = filter isClientRequest clientMessages_
+    isClientRequest (CReq _) = True
+    isClientRequest _ = False
+    clientMessages_ = map (\(_, _, x) -> x) clientMessages
 handleClientRedirects _ = Nothing
 
-pShow :: Map.HashMap ServerId (ServerState Command () StateMachineM, StateMachine) -> String
+pShow :: Map.HashMap ServerId Node -> String
 pShow hmap =
   let f = fmap pShowAll (Map.toList hmap)
-      pShowAll (sid, (state, machine)) = unServerId sid ++ pShowMachine machine ++ " " ++ pShowState state
+      pShowAll (sid, (state, machine)) =
+        unServerId sid ++ pShowMachine machine ++ " " ++ pShowState state
       pShowState :: ServerState Command () StateMachineM -> String
       pShowState state =
-        let roleS = case state^.role of
-                      Leader -> "L"
-                      _ -> "F"
-            log = (mconcat . intersperse "|") $ fmap pShowEntry (state^.entryLog)
+        let roleS =
+              case state ^. role of
+                Leader -> "L"
+                _ -> "F"
+            log =
+              (mconcat . intersperse "|") $ fmap pShowEntry (state ^. entryLog)
         in roleS ++ " " ++ log
       pShowEntry :: LogEntry Command -> String
-      pShowEntry e = pShowCommand (e^.command)
-      pShowCommand c = case c of
-                         NoOp  -> "∅"
-                         Set n -> "->" ++ show n
+      pShowEntry e = pShowCommand (e ^. command)
+      pShowCommand c =
+        case c of
+          NoOp -> "∅"
+          Set n -> "->" ++ show n
       pShowMachine m = "=" ++ show (value m)
-   in (unwords . intersperse " ") f
+  in (unwords . intersperse " ") f
 
 recipient :: Message a b -> ServerId
 recipient msg =
@@ -154,7 +164,7 @@ mkServer ::
   -> (Int, Int, Int)
   -> MonotonicCounter
   -> (Command -> StateMachineM ())
-  -> (ServerState Command () StateMachineM, StateMachine)
+  -> Node
 mkServer serverId otherServerIds electionTimeout heartbeatTimeout apply =
   (serverState, StateMachine {value = 0})
   where
