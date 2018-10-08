@@ -55,6 +55,7 @@ executables:
     - optparse-applicative
     - dhall
     - stm
+    - stm-chans
 
 tests:
   integration:

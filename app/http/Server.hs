@@ -3,38 +3,35 @@
 
 module Server (runServer) where
 
-import           Control.Concurrent           (ThreadId, forkIO, threadDelay)
-import           Control.Concurrent.STM.TChan (TChan, newTChan, readTChan,
-                                               writeTChan)
-import           Control.Concurrent.STM.TVar  (TVar, newTVar, readTVar,
-                                               readTVarIO, writeTVar)
-import           Control.Monad.STM            (STM, atomically, retry)
+import           Control.Concurrent            (ThreadId, forkIO, threadDelay)
+import           Control.Concurrent.STM.TChan  (TChan, newTChan, readTChan,
+                                                writeTChan)
+import           Control.Concurrent.STM.TMChan (TMChan, closeTMChan, newTMChan,
+                                                readTMChan, writeTMChan)
+import           Control.Concurrent.STM.TVar   (TVar, modifyTVar', newTVar,
+                                                readTVar, readTVarIO, writeTVar)
+import           Control.Monad.STM             (STM, atomically, retry)
 
 import           Control.Monad.Logger
-import           Control.Monad.State.Strict hiding (state)
-import           Data.List                  (find)
-import           Data.Map.Strict            (Map)
-import qualified Data.Map.Strict            as Map
-import           Data.Maybe                 (fromJust)
-import qualified Data.Text                  as T
-import           Data.Time.Clock            (getCurrentTime)
-import           Data.Time.Format           (defaultTimeLocale, formatTime,
-                                             iso8601DateFormat)
-import           Network.HTTP.Client        (Manager, defaultManagerSettings,
-                                             newManager)
-import           Network.Wai.Handler.Warp   (run)
-import           Raft.Lens                  hiding (apply)
+import           Control.Monad.State.Strict    hiding (state)
+import           Data.List                     (find)
+import           Data.Map.Strict               (Map)
+import qualified Data.Map.Strict               as Map
+import qualified Data.Text                     as T
+import           Network.HTTP.Client           (Manager, defaultManagerSettings,
+                                                newManager)
+import           Network.Wai.Handler.Warp      (run)
+import           Raft.Lens                     hiding (apply)
 import           Servant
 import           Servant.Client
-import           System.Environment         (getArgs)
 import           System.Random
 
-import qualified Raft                       (Message (..), handleMessage)
-import           Raft.Log                   (RequestId (..))
-import qualified Raft.Rpc                   as Rpc
-import           Raft.Server                (MonotonicCounter (..), ServerId,
-                                             ServerId (..), ServerState (..),
-                                             mkServerState)
+import qualified Raft                          (Message (..), handleMessage)
+import           Raft.Log                      (RequestId (..))
+import qualified Raft.Rpc                      as Rpc
+import           Raft.Server                   (MonotonicCounter (..), ServerId,
+                                                ServerId (..), ServerState (..),
+                                                mkServerState)
 
 import           Api
 import           Config
@@ -45,7 +42,7 @@ type RaftServer = ServerState Command CommandResponse (StateMachineT (WriterLogg
 data Config = Config { state    :: TVar (RaftServer, StateMachine)
                      , queue    :: TChan Message
                      , apply_   :: Command -> StateMachineM CommandResponse
-                     , requests :: TVar (Map RequestId Message)
+                     , requests :: TVar (Map RequestId (TMChan (Rpc.ClientRes CommandResponse)))
                      }
 
 logState :: Config -> LoggingT IO ()
@@ -89,21 +86,24 @@ serveClientRequest :: Config -> Rpc.ClientReq Command -> Handler (Rpc.ClientRes 
 serveClientRequest config req = liftIO $ runLogger $ do
   let reqId = req^.clientRequestId
       reqMapVar = requests config
+
+  -- Create a channel for the response and insert it into the map
+  chan <- liftIO . atomically $ do
+    c <- newTMChan
+    modifyTVar' reqMapVar (Map.insert reqId c)
+    pure c
+
   logInfoN "Processing client request"
   processMessage config (toRaftMessage req)
+
+  -- Wait for the response to sent through the channel
   logInfoN "Waiting for response to request"
-  -- Check the map to see if the response has been placed in it. If it hasn't, retry.
-  resp <- liftIO . atomically $ do
-    reqMap <- readTVar reqMapVar
-    case Map.lookup reqId reqMap of
-      Just resp -> do
-        writeTVar reqMapVar (Map.delete reqId reqMap)
-        pure resp
-      _ -> retry
-  logInfoN "Response found"
-  case fromRaftMessage resp of
-    Nothing -> error "could not decode client response"
-    Just r  -> pure r
+  resp <- liftIO . atomically $ readTMChan chan
+  case resp of
+    Just r -> do
+      logInfoN "Response found"
+      pure r
+    Nothing -> error "No response found"
 
 app :: Config -> Application
 app config = serve raftAPI (server config)
@@ -119,13 +119,24 @@ runServer selfName config = do
     q <- newTChan
     m <- newTVar Map.empty
     pure (s, q, m)
+
   let config = Config { state = serverState, queue = queue, apply_ = apply, requests = reqMap }
+
+  -- Logger
   _ <- forkForever $ runLogger (logState config)
+
+  -- Clock
   _ <- forkForever $ do
     threadDelay 1000 -- 1ms
     runLogger (processTick config)
+
+  -- HTTP connection manager
   manager <- newManager defaultManagerSettings
+
+  -- Outbound message dispatcher
   _ <- forkForever $ runLogger (deliverMessages config manager)
+
+  -- Inbound HTTP handler
   run (baseUrlPort selfUrl) (app config)
 
 runLogger :: LoggingT IO a -> IO a
@@ -146,13 +157,13 @@ deliverMessages config manager = do
 
 sendClientResponse :: Config -> Rpc.ClientRes CommandResponse -> LoggingT IO ()
 sendClientResponse config r = do
-  -- insert the response into the request map, using the original request ID
   let reqId = r^.responseId
       reqMapVar = requests config
   logDebugN "Processing client response"
-  liftIO . atomically $ do
-    reqs <- readTVar reqMapVar
-    writeTVar reqMapVar (Map.insert reqId (toRaftMessage r) reqs)
+  reqs <- liftIO $ readTVarIO reqMapVar
+  case Map.lookup reqId reqs of
+    Just chan -> liftIO . atomically $ writeTMChan chan r
+    Nothing -> logInfoN "No response channel found - ignoring response"
 
 -- TODO: if RPC cannot be delivered, enqueue it for retry
 sendRpc :: Message -> ClientEnv -> Config -> LoggingT IO ()
