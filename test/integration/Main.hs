@@ -46,14 +46,19 @@ main = do
   let servers = Map.fromList [(sid1, mkServer sid1 [sid2, sid3] (3, 3, 0) 2 apply)
                             , (sid2, mkServer sid2 [sid1, sid3] (4, 4, 0) 2 apply)
                             , (sid3, mkServer sid3 [sid1, sid2] (5, 5, 0) 2 apply)]
-  testLoop servers (Queue clientMessages)
+      clockEnd = 35
+      ticks = concatMap (\sid -> generateTicks sid clockEnd) [sid1, sid2, sid3]
+      msgs = foldl push (Queue clientMessages) ticks
+  testLoop servers (pure False) msgs
 
 clientMessages :: [ClientMessage]
 clientMessages = [(15, sid1, CReq ClientReq { _requestPayload = Set 42, _clientRequestId = 0})
                 , (20, sid1, CReq ClientReq { _requestPayload = Set 43, _clientRequestId = 1 })
                 , (30, sid1, CReq ClientReq { _requestPayload = Set 7, _clientRequestId = 2 })
-                , (35, sid2, Tick)
-                , (35, sid3, Tick)] -- wait for the followers to apply their logs
+                 ]
+
+generateTicks :: ServerId -> Integer -> [ClientMessage]
+generateTicks sid end = map (\t -> (t, sid, Tick)) [0..end]
 
 -- A queue of client messages, ordered by time
 newtype Queue = Queue [ClientMessage]
@@ -67,8 +72,13 @@ push (Queue q) m = Queue $ sortOn (\(c, _, _) -> c) (m : q)
 pop :: Queue -> (ClientMessage, Queue)
 pop (Queue (m : q)) = (m, Queue q)
 
-testLoop :: Map.HashMap ServerId Node -> Queue -> IO ()
-testLoop s = go s 0
+isEmpty :: Queue -> Bool
+isEmpty (Queue l ) = null l
+
+type Clock = Integer
+
+testLoop :: Map.HashMap ServerId Node -> IO Bool -> Queue -> IO ()
+testLoop s filter = go s 0
   where
     -- no more client messages
     go servers _ (Queue []) =
@@ -78,23 +88,27 @@ testLoop s = go s 0
     go servers clock queue =
       let ((time, sid, msg), queue') = pop queue
        in if time > clock
-             then let ticks = map (\sid -> (clock, sid, Tick)) (Map.keys servers)
-                      queue' = foldl push queue ticks
-                  in do
-                    putStrLn $ show clock ++ ":" ++ pShow servers
-                    go servers (clock + 1) queue'
-             else
-              let
-                (msgs, (state', machine')) = sendMessage msg (servers Map.! sid)
-               in do
-                 putStrLn $ show clock ++ ":" ++ pShow servers
-                 dropMessages <- randomIO :: IO Bool
-                 let dropMessages = False
-                 let (clientResponses, rest) = if dropMessages then ([], []) else partition isClientResponse msgs
-                     redirects = mapMaybe handleClientRedirects clientResponses
-                     servers' = Map.insert sid (state', machine') servers
-                     queue'' = foldl push queue' $ map (\m -> (clock, recipient m, m)) rest ++ redirects
-                 go servers' clock queue''
+             then go servers (clock + 1) queue
+             else do
+               (servers', queue') <- runCycle servers filter clock queue
+               putStrLn (pShow servers')
+               go servers' clock queue'
+
+runCycle :: Map.HashMap ServerId Node -> IO Bool -> Clock -> Queue -> IO (Map.HashMap ServerId Node, Queue)
+runCycle servers filter clock queue | isEmpty queue = pure (servers, queue)
+runCycle servers filter clock queue = do
+  let ((time, sid, msg), queue') = pop queue
+  if time > clock
+     then pure (servers, queue) -- and we should send ticks to each server
+     else let
+            (msgs, (state', machine')) = sendMessage msg (servers Map.! sid)
+           in do
+             dropMessages <- filter
+             let (clientResponses, rest) = if dropMessages then ([], []) else partition isClientResponse msgs
+                 redirects = mapMaybe handleClientRedirects clientResponses
+                 servers' = Map.insert sid (state', machine') servers
+                 queue'' = foldl push queue' $ map (\m -> (clock, recipient m, m)) rest ++ redirects
+             pure (servers', queue'')
 
 sendMessage :: Message Command () -> Node -> ([Message Command ()], Node)
 sendMessage msg (s, m) =
