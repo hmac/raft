@@ -15,6 +15,7 @@ import           Data.Binary                 (Binary)
 import qualified Data.HashMap.Strict         as Map
 import           Data.Maybe                  (fromJust, isNothing)
 import           Data.Ratio                  ((%))
+import           Data.Text                   (Text)
 import qualified Data.Text                   as T
 import           Data.Typeable               (Typeable)
 import           GHC.Generics                (Generic)
@@ -188,12 +189,9 @@ handleAppendEntries r = do
   log <- use entryLog
   currentCommitIndex <- use commitIndex
   currentTerm <- use serverTerm
-  let (valid, reason) = validateAppendEntries currentTerm log r
-  case valid of
-    False -> do
-      logInfoN reason
-      pure False
-    True -> do
+  case validateAppendEntries currentTerm log r of
+    Left failureReason -> logInfoN failureReason >> pure False
+    Right () -> do
       unless (null (r^.entries)) $ logDebugN $ T.pack $ "Appending entries to log: " ++ show (map (^.index) (r^.entries))
       entryLog %= (\l -> appendEntries l (r^.entries))
       when (r^.leaderCommit > currentCommitIndex) $ do
@@ -201,14 +199,13 @@ handleAppendEntries r = do
         commitIndex .= min (r^.leaderCommit) (lastNewEntry^.index)
       pure True
 
--- TODO: this is a crap return type - improve it
-validateAppendEntries :: Term -> Log a -> AppendEntriesReq a -> (Bool, T.Text)
+validateAppendEntries :: Term -> Log a -> AppendEntriesReq a -> Either Text ()
 validateAppendEntries currentTerm log rpc =
   if rpc^.leaderTerm < currentTerm
-     then (False, "AppendEntries denied: term < currentTerm")
+     then Left "AppendEntries denied: term < currentTerm"
      else case matchingLogEntry of
-            Nothing -> (False, "AppendEntries denied: no entry found")
-            Just _  -> (True, "AppendEntries approved")
+            Nothing -> Left "AppendEntries denied: no entry found"
+            Just _  -> Right ()
   where matchingLogEntry = findEntry log (rpc^.prevLogIndex) (rpc^.prevLogTerm)
 
 -- if an existing entry conflicts with a new one (same index, different terms),
