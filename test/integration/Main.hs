@@ -1,10 +1,11 @@
-import           Control.Monad.Logger
-import           Control.Monad.State.Strict
-import           Data.Functor.Identity
-import qualified Data.HashMap.Strict        as Map
-import           Data.List                  (find, partition, sortOn, intersperse)
-import           Data.Maybe                 (fromJust, mapMaybe)
-import           System.Random              (randomIO)
+import Control.Monad.Logger
+import Control.Monad.State.Strict
+import Data.Functor.Identity
+import qualified Data.HashMap.Strict as Map
+import Data.List (find, intersperse, partition, sortOn)
+import Data.Maybe (fromJust, mapMaybe)
+import Data.Word
+import System.Random (randomRIO)
 
 import           Raft
 import Raft.Log (LogEntry)
@@ -31,13 +32,13 @@ apply NoOp    = pure ()
 apply (Set i) = put StateMachine { value = i }
 
 sid1 :: ServerId
-sid1 = ServerId "1"
+sid1 = ServerId "alice"
 
 sid2 :: ServerId
-sid2 = ServerId "2"
+sid2 = ServerId "bob"
 
 sid3 :: ServerId
-sid3 = ServerId "3"
+sid3 = ServerId "charlie"
 
 type ClientMessage = (Integer, ServerId, Message Command Response)
 
@@ -46,15 +47,23 @@ main = do
   let servers = Map.fromList [(sid1, mkServer sid1 [sid2, sid3] (3, 3, 0) 2 apply)
                             , (sid2, mkServer sid2 [sid1, sid3] (4, 4, 0) 2 apply)
                             , (sid3, mkServer sid3 [sid1, sid2] (5, 5, 0) 2 apply)]
-      clockEnd = 35
+      clockEnd = 1000
       ticks = concatMap (\sid -> generateTicks sid clockEnd) [sid1, sid2, sid3]
       msgs = foldl push (Queue clientMessages) ticks
+      lossyFilter :: Integer -> Integer -> Integer -> IO Bool
+      lossyFilter min max threshold = do
+        rInt <- randomRIO (min, max)
+        pure $ rInt < threshold
+  putStrLn "Testing a happy path"
   testLoop servers (pure False) msgs
+  (flip mapM_) [0, 1, 2, 5, 10, 20, 50, 80, 90] $ \c -> do
+    putStrLn $ "Testing a network with " ++ show c ++ "% packet loss"
+    testLoop servers (lossyFilter 0 100 c) msgs
 
 clientMessages :: [ClientMessage]
-clientMessages = [(15, sid1, CReq ClientReq { _requestPayload = Set 42, _clientRequestId = 0})
-                , (20, sid1, CReq ClientReq { _requestPayload = Set 43, _clientRequestId = 1 })
-                , (30, sid1, CReq ClientReq { _requestPayload = Set 7, _clientRequestId = 2 })
+clientMessages = [(15, sid1, CReq ClientReq { _requestPayload = Set 3, _clientRequestId = 0})
+                , (20, sid1, CReq ClientReq { _requestPayload = Set 2, _clientRequestId = 1 })
+                , (30, sid1, CReq ClientReq { _requestPayload = Set 1, _clientRequestId = 2 })
                  ]
 
 generateTicks :: ServerId -> Integer -> [ClientMessage]
@@ -91,7 +100,7 @@ testLoop s filter = go s 0
              then go servers (clock + 1) queue
              else do
                (servers', queue') <- runCycle servers filter clock queue
-               putStrLn (pShow servers')
+               -- putStrLn $ show clock ++ " " ++ pShow servers'
                go servers' clock queue'
 
 runCycle :: Map.HashMap ServerId Node -> IO Bool -> Clock -> Queue -> IO (Map.HashMap ServerId Node, Queue)
@@ -99,7 +108,7 @@ runCycle servers filter clock queue | isEmpty queue = pure (servers, queue)
 runCycle servers filter clock queue = do
   let ((time, sid, msg), queue') = pop queue
   if time > clock
-     then pure (servers, queue) -- and we should send ticks to each server
+     then pure (servers, queue)
      else let
             (msgs, (state', machine')) = sendMessage msg (servers Map.! sid)
            in do
