@@ -33,6 +33,9 @@ data ServerState a b machineM = ServerState
   { _selfId           :: ServerId
   -- all other server IDs (TODO: this needs to be stored in the state machine)
   , _serverIds        :: [ServerId]
+  -- Who the server thinks is the current leader. This is only used for redirecting client
+  -- requests and isn't guaranteed to be accurate.
+  , _leaderId         :: Maybe ServerId
   -- latest term server has seen (initialised to 0, increases monotonically)
   , _serverTerm       :: Term
   -- Candidate ID that received vote in current term (or Nothing)
@@ -94,6 +97,7 @@ mkServerState :: ServerId -> [ServerId] -> (Int, Int, Int) -> MonotonicCounter -
 mkServerState self others (electLow, electHigh, electSeed) hbTimeout firstCommand apply = s
   where s = ServerState { _selfId = self
                         , _serverIds = others
+                        , _leaderId = Nothing
                         , _serverTerm = 0
                         , _votedFor = Nothing
                         , _entryLog = emptyLog

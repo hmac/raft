@@ -158,9 +158,9 @@ handleClientRequest r = do
   let c = r^.requestPayload
       reqId = r^.clientRequestId
   role <- use role
-  votedFor <- use votedFor
+  leaderId <- use leaderId
   self <- use selfId
-  case (role, votedFor) of
+  case (role, leaderId) of
     (Leader, _) -> do
       logInfoN "responding to client request"
       log <- use entryLog
@@ -192,11 +192,17 @@ handleAppendEntries r = do
   case validateAppendEntries currentTerm log r of
     Left failureReason -> logInfoN failureReason >> pure False
     Right () -> do
+      -- Append new entries to log
       unless (null (r^.entries)) $ logDebugN $ T.pack $ "Appending entries to log: " ++ show (map (^.index) (r^.entries))
       entryLog %= (\l -> appendEntries l (r^.entries))
+
+      -- Update commit index
       when (r^.leaderCommit > currentCommitIndex) $ do
         lastNewEntry <- last <$> use entryLog
         commitIndex .= min (r^.leaderCommit) (lastNewEntry^.index)
+
+      -- Update knowledge of leader
+      leaderId .= Just (r^.from)
       pure True
 
 validateAppendEntries :: Term -> Log a -> AppendEntriesReq a -> Either Text ()

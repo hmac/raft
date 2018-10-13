@@ -44,13 +44,11 @@ state machine commands and return values, respectively.
 - Unit tests for all node behaviours and the `AppendEntries` and `RequestVote`
   RPC calls.
 - A basic integration test of a three-node cluster, with simulated clocks.
-- A prototype implementation over HTTP
+- An implementation using HTTP transport
   - Clients can send read/write requests and receive responses
+  - Request redirection from non-leaders to leader
 
 ## Planned features
-- Full support for client requests
-  - Request redirection from non-leaders to leader
-  - Full support for the client RPCs described in the Raft thesis
 - Membership changes
 - Tests for common failure scenarios
 - Randomised tests for edge case failure scenarios
