@@ -36,9 +36,9 @@ library:
   source-dirs: src
 
 executables:
-  http:
+  raft:
     main:               Main.hs
-    source-dirs:        app/http
+    source-dirs:        app
     ghc-options:
     - -threaded
     - -rtsopts
