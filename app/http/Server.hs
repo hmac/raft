@@ -49,7 +49,7 @@ logState :: Config -> LoggingT IO ()
 logState Config { state } = do
   liftIO $ threadDelay 2000000
   (ServerState { _role, _serverTerm, _nextIndex, _matchIndex }, m) <- liftIO $ readTVarIO state
-  (logInfoN . T.pack . show) (_role, _serverTerm, _nextIndex, m)
+  (logDebugN . T.pack . show) (_role, _serverTerm, _nextIndex, m)
 
 -- Apply a Raft message to the state
 processMessage :: Config -> Message -> LoggingT IO ()
@@ -109,8 +109,9 @@ app :: Config -> Application
 app config = serve raftAPI (server config)
 
 runServer :: String -> ClusterConfig -> IO ()
-runServer selfName config = do
-  let (selfId, others) = identifySelf selfName config
+runServer selfAddr config = do
+  let selfId = ServerId selfAddr
+      others = filter (/= selfId) $ map (ServerId . address) (nodes config)
   selfUrl <- parseBaseUrl (unServerId selfId)
   seed <- getStdRandom random
   (serverState, queue, reqMap) <- atomically $ do
@@ -185,16 +186,6 @@ sendRpc msg env Config { queue } = do
       -- liftIO . atomically $ writeTChan queue msg
       pure ()
     Right _  -> pure ()
-
-identifySelf :: String -> ClusterConfig -> (ServerId, [ServerId])
-identifySelf selfName (ClusterConfig nodes) =
-  let mself = find ((== selfName) . name) nodes
-  in case mself of
-    Nothing -> error $ "Unrecognised node name: " ++ selfName
-    Just self ->
-      let selfId = ServerId (address self)
-          others = map (ServerId . address) $ filter ((/= selfName) . name) nodes
-       in (selfId, others)
 
 mkServer ::
   Monad m =>

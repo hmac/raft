@@ -72,17 +72,17 @@ stack build
 
 Start three nodes, each in their own shell:
 ```shell
-stack exec http server node1 ./example-config.dhall
-stack exec http server node2 ./example-config.dhall
-stack exec http server node3 ./example-config.dhall
+stack exec http server localhost:10501 ./example-config.dhall
+stack exec http server localhost:10502 ./example-config.dhall
+stack exec http server localhost:10503 ./example-config.dhall
 ```
 
 Set a value on the state machine
 ```shell
-stack exec http client node1 ./example-config.dhall set name harry
+stack exec http client localhost:10501 set name harry
 ```
 
 Read it back
 ```shell
-stack exec http client node1 ./example-config.dhall get name
+stack exec http client localhost:10501 get name
 ```

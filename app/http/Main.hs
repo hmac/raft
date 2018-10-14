@@ -9,13 +9,13 @@ import           Api                 (Command (..))
 import Config
 
 data Options = ServerOpts String String
-             | ClientOpts String String Command
+             | ClientOpts String Command
 
 main = do
   args <- execParser options
   case args of
-    ServerOpts name configPath   -> parseConfig configPath >>= runServer name
-    ClientOpts name configPath c -> parseConfig configPath >>= runClient name c
+    ServerOpts name configPath -> parseConfig configPath >>= runServer name
+    ClientOpts name cmd -> runClient name cmd
 
 options = info parser $ fullDesc
                      <> progDesc "Raft HTTP"
@@ -24,12 +24,11 @@ options = info parser $ fullDesc
 parser = hsubparser $ command "server" (info serverOptions (progDesc "Start the server"))
                    <> command "client" (info clientOptions (progDesc "Issue a client request"))
 
-serverOptions = ServerOpts <$> strArgument (metavar "[name]")
+serverOptions = ServerOpts <$> strArgument (metavar "[address]")
                            <*> strArgument (metavar "[path to config file]")
 
 
-clientOptions = ClientOpts <$> strArgument (metavar "[node name]")
-                           <*> strArgument (metavar "[path to config file]")
+clientOptions = ClientOpts <$> strArgument (metavar "[node address]")
                            <*> clientCmd
 
 clientCmd = hsubparser $ command "set" (info set (fullDesc <> progDesc "set a value"))

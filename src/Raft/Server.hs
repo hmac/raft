@@ -14,7 +14,6 @@ import           System.Random
 
 import           Raft.Log
 
--- Server IDs start at 0 and increase monotonically
 newtype ServerId = ServerId
   { unServerId :: String
   } deriving (Eq, Ord, Generic, Hashable, Typeable, Binary)
