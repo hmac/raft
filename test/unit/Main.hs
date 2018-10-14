@@ -1,18 +1,20 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 
-import           Control.Monad.Identity
-import           Control.Monad.Logger
-import           Control.Monad.State.Strict
+import Control.Monad.Identity
+import Control.Monad.Logger
+import Control.Monad.State.Strict
 
-import qualified Data.HashMap.Strict        as Map
-import           Raft
-import           Raft.Lens                  hiding (apply)
-import           Raft.Log
-import           Raft.Rpc
-import           Raft.Server                hiding (apply, mkServerState)
-import qualified Raft.Server                (mkServerState)
+import Data.Maybe (fromJust)
 
-import           Test.Hspec
+import qualified Data.HashMap.Strict as Map
+import Raft
+import Raft.Lens hiding (apply)
+import Raft.Log
+import Raft.Rpc
+import Raft.Server hiding (apply, mkServerState)
+import qualified Raft.Server (mkServerState)
+
+import Test.Hspec
 
 data Command =
     NoOp
@@ -41,6 +43,7 @@ main = hspec $ do
   testRequestVoteReq
   testRequestVoteRes
   testAppendEntriesRes
+  testAddServerReq
 
 mkLogEntry :: LogIndex -> Term -> LogEntry Command
 mkLogEntry i t = LogEntry { _index = i
@@ -417,3 +420,30 @@ testRequestVoteRes = do
                                                 , _entries = []
                                                 , _leaderCommit = 0
                                                 }]
+
+testAddServerReq :: Spec
+testAddServerReq = do
+  let (_, node) = sendMsg (mkServerState s1 [s2, s3] 0 10) Tick
+  let newServerId = ServerId "the-new-server"
+
+  context "when AddServer RPC is sent" $ do
+    let msg = ASReq AddServerReq { _newServer = newServerId }
+        (msgs, node') = sendMsg node msg
+    it "starts a server addition" $ do
+      let addition = fromJust $ node'^.serverAddition
+      addition^.newServer `shouldBe` newServerId
+      addition^.maxRounds `shouldBe` 10
+      addition^.currentRound `shouldBe` 1
+      addition^.roundIndex `shouldBe` 0
+      addition^.roundTimer `shouldBe` MonotonicCounter 0
+    it "sends an AppendEntriesReq to the new server" $ do
+      length msgs `shouldBe` 1
+      let [AEReq rpc] = msgs
+      rpc^.from `shouldBe` node'^.selfId
+      rpc^.to `shouldBe` newServerId
+      length (rpc^.entries) `shouldBe` 1
+
+-- TODO:
+-- - test that rounds are incremented
+-- - test that sufficient catchup is detected
+-- - test that round exhaustion is detected

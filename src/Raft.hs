@@ -12,6 +12,7 @@ import           Control.Lens                (at, use, (%=), (.=), (<+=), (?=),
 import           Control.Monad.State.Strict
 import           Control.Monad.Writer.Strict
 import           Data.Binary                 (Binary)
+import           Data.HashMap.Strict         (HashMap)
 import qualified Data.HashMap.Strict         as Map
 import           Data.Maybe                  (fromJust, isNothing)
 import           Data.Ratio                  ((%))
@@ -45,6 +46,8 @@ data Message a b =
     | RVRes RequestVoteRes
     | CReq (ClientReq a)
     | CRes (ClientRes b)
+    | ASReq AddServerReq
+    | ASRes AddServerRes
     | Tick
     deriving (Generic)
 
@@ -74,6 +77,7 @@ handleMessage m = snd <$> runWriterT go
         RVRes r -> checkForNewTerm (r^.voterTerm) >> handleRequestVoteRes (r^.from) (r^.to) r
         CReq r -> handleClientRequest r
         CRes r -> undefined -- what should we do here?
+        ASReq r -> handleAddServerReq (r^.newServer)
 
 handleTick :: MonadLogger m => ServerT a b m ()
 handleTick = do
@@ -114,21 +118,73 @@ handleAppendEntriesRes :: MonadLogger m => ServerId -> ServerId -> AppendEntries
 handleAppendEntriesRes from to r = do
   isLeader <- (== Leader) <$> use role
   when isLeader $ do
-    -- update nextIndex and matchIndex for follower
-    -- the follower has told us what its most recent log entry is,
-    -- so we set matchIndex equal to that and nextIndex to the index after that.
-    -- matchIndex[followerId] := RPC.index
-    -- nextIndex[followerId] := RPC.index + 1
-    next <- use $ nextIndex . at from
-    match <- use $ matchIndex . at from
-    case (next, match) of
-      (Just n, Just m) -> do
-        nextIndex . at from ?= r^.logIndex + 1
-        matchIndex . at from ?= r^.logIndex
-        checkCommitIndex
-        applyCommittedLogEntries
-        unless (r^.success) $ sendAppendEntries from (r^.logIndex + 1)
-      _ -> error "expected nextIndex and matchIndex to have element!"
+    -- If this RPC is from a server that we're trying to add to the cluster, treat it
+    -- differently
+    addition <- use serverAddition
+    case addition of
+      Just add -> if add^.newServer == from
+                     then handleCatchupAppendEntriesRes from to r add
+                     else handleNormalAppendEntriesRes from to r
+      Nothing -> handleNormalAppendEntriesRes from to r
+
+handleNormalAppendEntriesRes :: MonadLogger m => ServerId -> ServerId -> AppendEntriesRes -> ServerT a b m ()
+handleNormalAppendEntriesRes from to r = do
+  -- update nextIndex and matchIndex for follower
+  -- the follower has told us what its most recent log entry is,
+  -- so we set matchIndex equal to that and nextIndex to the index after that.
+  -- matchIndex[followerId] := RPC.index
+  -- nextIndex[followerId] := RPC.index + 1
+  next <- use $ nextIndex . at from
+  match <- use $ matchIndex . at from
+  case (next, match) of
+    (Just n, Just m) -> do
+      nextIndex . at from ?= r^.logIndex + 1
+      matchIndex . at from ?= r^.logIndex
+      checkCommitIndex
+      applyCommittedLogEntries
+      unless (r^.success) $ sendAppendEntries from (r^.logIndex + 1)
+    _ -> error "expected nextIndex and matchIndex to have element!"
+
+handleCatchupAppendEntriesRes :: MonadLogger m => ServerId -> ServerId -> AppendEntriesRes -> ServerAddition -> ServerT a b m ()
+handleCatchupAppendEntriesRes from to r addition = do
+  -- update nextIndex and matchIndex
+  nextIndex . at from ?= r^.logIndex + 1
+  matchIndex . at from ?= r^.logIndex
+
+  -- check if max rounds reached
+  eTimeout <- readTimeout <$> use electionTimeout
+  if addition^.currentRound > addition^.maxRounds
+  then do
+    serverAddition .= Nothing
+    nextIndex %= Map.delete from
+    matchIndex %= Map.delete from
+    tell1 $ ASRes AddServerRes { _leaderHint = Just to, _status = AddServerTimeout }
+  else do
+    -- check for round completion
+    if addition^.roundIndex == r^.logIndex
+    then do
+      -- if completed round lasted less than election timeout, complete addition by
+      -- adding the server to the cluster (this involves creating a configuration log
+      -- entry and appending it to the log).
+      if addition^.roundTimer < eTimeout
+      then do
+        logInfoN "New server has caught up - adding it to the cluster"
+        logInfoN "NOTE: Cluster configuration changes not yet supported, so actually doing nothing here"
+        pure ()
+      else do
+        -- start new round
+        -- TODO: use a lens for this
+        mostRecentLogIndex <- (^.index) . head <$> use entryLog
+        serverAddition ?= ServerAddition { _newServer = addition^.newServer
+                                         , _maxRounds = addition^.maxRounds
+                                         , _currentRound = addition^.currentRound + 1
+                                         , _roundIndex = mostRecentLogIndex
+                                         , _roundTimer = 0
+                                         }
+        sendAppendEntries from (r^.logIndex + 1)
+    else
+      sendAppendEntries from (r^.logIndex + 1)
+
 
 handleRequestVoteReq :: MonadLogger m => ServerId -> ServerId -> RequestVoteReq -> ServerT a b m ()
 handleRequestVoteReq from to r = do
@@ -251,6 +307,32 @@ handleRequestVote r = do
             (_, False) -> do
               logInfoN "RequestVote denied: candidate's log is not up to date"
               pure False
+
+handleAddServerReq :: MonadLogger m => ServerId -> ServerT a b m ()
+handleAddServerReq newServer = do
+  isLeader <- (== Leader) <$> use role
+  leader <- use leaderId
+  if isLeader
+  then do
+    tell1 $ ASRes AddServerRes { _status = AddServerNotLeader, _leaderHint = leader }
+    pure ()
+  else do
+    -- Set up ServerAddition
+    mostRecentLogIndex <- (^.index) . head <$> use entryLog
+    serverAddition .= Just ServerAddition
+      { _newServer = newServer
+      , _maxRounds = 10
+      , _currentRound = 1
+      , _roundIndex = mostRecentLogIndex
+      , _roundTimer = 0
+      }
+
+    -- Add server to nextIndex and matchIndex
+    nextIndex %= (Map.insert newServer 0)
+    matchIndex %= (Map.insert newServer 0)
+
+    -- Send single AppendEntriesReq to server
+    sendAppendEntries newServer mostRecentLogIndex
 
 -- Raft determines which of two logs is more up-to-date by comparing the index
 -- and term of the last entries in the logs. If the logs have last entries with

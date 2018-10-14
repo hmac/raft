@@ -11,7 +11,11 @@ module Raft.Rpc (
 , RequestVoteReq(..)
 , RequestVoteRes(..)
 , ClientReq(..)
-, ClientRes(..))
+, ClientRes(..)
+, AddServerReq(..)
+, AddServerRes(..)
+, AddServerStatus(..)
+)
 where
 
 import           Control.Lens
@@ -105,3 +109,30 @@ data ClientRes b
 instance Binary b => Binary (ClientRes b)
 deriving instance (Show b) => Show (ClientRes b)
 deriving instance (Eq b) => Eq (ClientRes b)
+
+data AddServerReq = AddServerReq
+  -- address of server to add to configuration
+  { _newServer :: ServerId
+  } deriving (Generic, Eq, Show)
+
+instance Binary AddServerReq
+
+data AddServerRes = AddServerRes
+  -- the outcome of the operation
+  { _status :: AddServerStatus
+  -- the address of the recent leader, if known
+  , _leaderHint :: Maybe ServerId
+  } deriving (Generic, Eq, Show)
+
+instance Binary AddServerRes
+
+data AddServerStatus
+  -- Server addition was successful
+  = AddServerOk
+  -- recipient is not leader
+  | AddServerNotLeader
+  -- new server did not make progress in time (§4.2.1)
+  | AddServerTimeout
+  deriving (Generic, Eq, Show)
+
+instance Binary AddServerStatus

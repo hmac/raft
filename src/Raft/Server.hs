@@ -72,6 +72,16 @@ data ServerState a b machineM = ServerState
   -- The state machine function. This takes commands and applies them to the
   -- state machine via the machineM monad
   , _apply            :: a -> machineM b
+  -- [LEADER] The current status of a new server addition, if one is being added.
+  , _serverAddition :: Maybe ServerAddition
+  }
+
+data ServerAddition = ServerAddition
+  { _newServer :: ServerId,
+    _maxRounds :: Int,
+    _currentRound :: Int,
+    _roundIndex :: LogIndex,
+    _roundTimer :: MonotonicCounter
   }
 
 data Timeout = Timeout { low :: Int, high :: Int, gen :: StdGen } deriving (Show)
@@ -112,6 +122,7 @@ mkServerState self others (electLow, electHigh, electSeed) hbTimeout firstComman
                         , _matchIndex = initialMap
                         , _votesReceived = 0
                         , _apply = apply
+                        , _serverAddition = Nothing
                         }
         emptyLog = [LogEntry { _index = 0, _term = 0, _command = firstCommand, _requestId = 0 }]
         initialMap = foldl' (\m sid -> Map.insert sid 0 m) Map.empty others

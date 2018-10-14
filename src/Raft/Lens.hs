@@ -17,6 +17,9 @@ makeFieldsNoPrefix ''RequestVoteReq
 makeFieldsNoPrefix ''RequestVoteRes
 makeFieldsNoPrefix ''ClientReq
 makeFieldsNoPrefix ''ClientRes
+makeFieldsNoPrefix ''AddServerReq
+makeFieldsNoPrefix ''AddServerRes
 
 makeFieldsNoPrefix ''LogEntry
+makeFieldsNoPrefix ''ServerAddition
 makeFieldsNoPrefix ''ServerState
