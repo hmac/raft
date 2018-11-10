@@ -5,17 +5,22 @@ import           Options.Applicative
 import           Server
 import           System.Environment  (getArgs)
 
-import           Api                 (Command (..))
-import Config
+import qualified Api                 (Command (..))
+import qualified Client              (Command (..))
+import           Config
+import           Raft.Log            (ServerId (ServerId))
 
-data Options = ServerOpts String String
-             | ClientOpts String Command
+data Options
+  = ServerOpts String
+               String
+  | ClientOpts String
+               Client.Command
 
 main = do
   args <- execParser options
   case args of
     ServerOpts name configPath -> parseConfig configPath >>= runServer name
-    ClientOpts name cmd -> runClient name cmd
+    ClientOpts name cmd        -> runClient name cmd
 
 options = info parser $ fullDesc
                      <> progDesc "Raft HTTP"
@@ -31,7 +36,9 @@ serverOptions = ServerOpts <$> strArgument (metavar "[address]")
 clientOptions = ClientOpts <$> strArgument (metavar "[node address]")
                            <*> clientCmd
 
-clientCmd = hsubparser $ command "set" (info set (fullDesc <> progDesc "set a value"))
-                      <> command "get" (info get (fullDesc <> progDesc "get a value"))
-  where set = Set <$> strArgument (metavar "[key]") <*> strArgument (metavar "[value]")
-        get = Get <$> strArgument (metavar "[key]")
+clientCmd = hsubparser $ command "set" (info (Client.ApiCommand <$> set) (fullDesc <> progDesc "set a value"))
+                      <> command "get" (info (Client.ApiCommand <$> get) (fullDesc <> progDesc "get a value"))
+                      <> command "add-server" (info addServer (fullDesc <> progDesc "add a server"))
+  where set = Api.Set <$> strArgument (metavar "[key]") <*> strArgument (metavar "[value]")
+        get = Api.Get <$> strArgument (metavar "[key]")
+        addServer = (Client.AddServer . ServerId) <$> strArgument (metavar "[server address]")

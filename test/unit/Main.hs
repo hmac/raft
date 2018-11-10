@@ -1,20 +1,20 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 
-import Control.Monad.Identity
-import Control.Monad.Logger
-import Control.Monad.State.Strict
+import           Control.Monad.Identity
+import           Control.Monad.Logger
+import           Control.Monad.State.Strict
 
-import Data.Maybe (fromJust)
+import           Data.Maybe                 (fromJust)
 
-import qualified Data.HashMap.Strict as Map
-import Raft
-import Raft.Lens hiding (apply)
-import Raft.Log
-import Raft.Rpc
-import Raft.Server hiding (apply, mkServerState)
-import qualified Raft.Server (mkServerState)
+import qualified Data.HashMap.Strict        as Map
+import           Raft
+import           Raft.Lens                  hiding (apply)
+import           Raft.Log
+import           Raft.Rpc
+import           Raft.Server                hiding (apply, mkServerState)
+import qualified Raft.Server                (mkServerState)
 
-import Test.Hspec
+import           Test.Hspec
 
 data Command =
     NoOp
@@ -48,7 +48,7 @@ main = hspec $ do
 mkLogEntry :: LogIndex -> Term -> LogEntry Command
 mkLogEntry i t = LogEntry { _index = i
                           , _term = t
-                          , _command = NoOp
+                          , _payload = LogCommand NoOp
                           , _requestId = 0 }
 
 mkServerState :: ServerId -> [ServerId] -> Int -> MonotonicCounter -> ServerState Command () StateMachineM
@@ -420,6 +420,8 @@ testRequestVoteRes = do
                                                 , _entries = []
                                                 , _leaderCommit = 0
                                                 }]
+
+-- TODO: test that a 1-node cluster votes for itself and becomes leader
 
 testAddServerReq :: Spec
 testAddServerReq = do

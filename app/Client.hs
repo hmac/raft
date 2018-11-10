@@ -1,6 +1,8 @@
-{-# LANGUAGE NamedFieldPuns    #-}
+{-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE NamedFieldPuns        #-}
 module Client where
 
+import           Data.List           (find)
 import           Data.Maybe          (fromMaybe)
 import qualified Data.Text.IO        as T (putStrLn)
 import           Network.HTTP.Client (Manager, defaultManagerSettings,
@@ -8,22 +10,32 @@ import           Network.HTTP.Client (Manager, defaultManagerSettings,
 import           Servant
 import           Servant.Client
 import           System.Random
-import Data.List (find)
 
-import           Api
+import qualified Api
 import           Config
-import           Raft.Log            (RequestId (RequestId))
-import           Raft.Rpc            (ClientReq (..), ClientRes (..))
-import           Raft.Server         (ServerId (..))
+import           Raft.Log            (RequestId (RequestId), ServerId (..))
+import           Raft.Rpc            (AddServerReq (..), AddServerRes (..),
+                                      AddServerStatus (..), ClientReq (..),
+                                      ClientRes (..))
+
+data Command
+  = ApiCommand Api.Command
+  | AddServer ServerId
 
 runClient :: String -> Command -> IO ()
 runClient nodeUrl cmd = do
-  reqId <- RequestId <$> randomIO
-  let req = ClientReq { _requestPayload = cmd, _clientRequestId = reqId }
   manager <- newManager defaultManagerSettings
   url <- parseBaseUrl nodeUrl
   let env = ClientEnv { manager = manager, baseUrl = url, cookieJar = Nothing }
-  res <- runClientM (sendClientRequest req) env
+  case cmd of
+    ApiCommand c  -> runApiCommand env c
+    AddServer sid -> runAddServer env sid
+
+runApiCommand :: ClientEnv -> Api.Command -> IO ()
+runApiCommand env cmd = do
+  reqId <- RequestId <$> randomIO
+  let req = ClientReq { _requestPayload = cmd, _clientRequestId = reqId }
+  res <- runClientM (Api.sendClientRequest req) env
   case res of
     Left (ConnectionError e)                        -> T.putStrLn e
     Left err                                        -> print err
@@ -33,5 +45,25 @@ runClient nodeUrl cmd = do
       case ml of
         Just (ServerId l) -> do
           putStrLn $ "Leader discovered: " ++ l ++ " - retrying request"
-          runClient l cmd
+          runClient l (ApiCommand cmd)
         Nothing -> pure ()
+
+runAddServer :: ClientEnv -> ServerId -> IO ()
+runAddServer env serverId = do
+  reqId <- RequestId <$> randomIO
+  let req = AddServerReq { _newServer = serverId, _requestId = reqId }
+  res <- runClientM (Api.sendAddServer req) env
+  case res of
+    Left (ConnectionError e)                        -> T.putStrLn e
+    Left err                                        -> print err
+    Right AddServerRes { _status = s, _leaderHint = ml } ->
+      case s of
+        AddServerOk -> print s
+        AddServerTimeout -> print s
+        AddServerNotLeader -> do
+          print s
+          case ml of
+            Just (ServerId l) -> do
+              putStrLn $ "Leader discovered: " ++ l ++ " - retrying request"
+              runClient l (AddServer serverId)
+            Nothing -> pure ()

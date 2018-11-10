@@ -16,12 +16,11 @@ import           Servant
 import           Servant.Client             (client)
 
 import qualified Raft                       (Message (..))
-import           Raft.Log                   (LogEntry, LogIndex, RequestId,
-                                             Term, unRequestId)
+import           Raft.Log                   (Config, LogEntry, LogIndex,
+                                             LogPayload (..), RequestId,
+                                             ServerId (..), Term, unRequestId)
 import qualified Raft.Rpc                   as Rpc
-import           Raft.Server                (MonotonicCounter (..), ServerId,
-                                             ServerId (..), ServerState,
-                                             mkServerState)
+import           Raft.Server                (MonotonicCounter (..), ServerState)
 
 -- State machine
 newtype StateMachine = StateMachine (HM.HashMap String String) deriving (Eq, Show)
@@ -86,6 +85,16 @@ instance RaftMessage (Rpc.ClientRes CommandResponse) where
   fromRaftMessage (Raft.CRes r) = Just r
   fromRaftMessage _             = Nothing
 
+instance RaftMessage Rpc.AddServerReq where
+  toRaftMessage = Raft.ASReq
+  fromRaftMessage (Raft.ASReq r) = Just r
+  fromRaftMessage _              = Nothing
+
+instance RaftMessage Rpc.AddServerRes where
+  toRaftMessage = Raft.ASRes
+  fromRaftMessage (Raft.ASRes r) = Just r
+  fromRaftMessage _              = Nothing
+
 -- Required additional To/FromJSON instances
 instance ToJSON ServerId
 instance FromJSON ServerId
@@ -93,6 +102,10 @@ instance ToJSON Term
 instance FromJSON Term
 instance ToJSON RequestId
 instance FromJSON RequestId
+instance ToJSON Config
+instance FromJSON Config
+instance ToJSON a => ToJSON (LogPayload a)
+instance FromJSON a => FromJSON (LogPayload a)
 instance ToJSON a => ToJSON (LogEntry a)
 instance FromJSON a => FromJSON (LogEntry a)
 instance ToJSON a => ToJSON (Rpc.AppendEntriesReq a)
@@ -107,6 +120,12 @@ instance ToJSON a => ToJSON (Rpc.ClientReq a)
 instance FromJSON a => FromJSON (Rpc.ClientReq a)
 instance ToJSON b => ToJSON (Rpc.ClientRes b)
 instance FromJSON b => FromJSON (Rpc.ClientRes b)
+instance ToJSON Rpc.AddServerReq
+instance FromJSON Rpc.AddServerReq
+instance ToJSON Rpc.AddServerRes
+instance FromJSON Rpc.AddServerRes
+instance ToJSON Rpc.AddServerStatus
+instance FromJSON Rpc.AddServerStatus
 
 -- Our API
 type RaftAPI = "AppendEntriesRequest" :> ReqBody '[JSON] (Rpc.AppendEntriesReq Command) :> Post '[JSON] ()
@@ -114,10 +133,11 @@ type RaftAPI = "AppendEntriesRequest" :> ReqBody '[JSON] (Rpc.AppendEntriesReq C
           :<|> "RequestVoteRequest" :> ReqBody '[JSON] Rpc.RequestVoteReq :> Post '[JSON] ()
           :<|> "RequestVoteRes" :> ReqBody '[JSON] Rpc.RequestVoteRes :> Post '[JSON] ()
           :<|> "Client" :> ReqBody '[JSON] (Rpc.ClientReq Command) :> Post '[JSON] (Rpc.ClientRes CommandResponse)
+          :<|> "AddServer" :> ReqBody '[JSON] Rpc.AddServerReq :> Post '[JSON] Rpc.AddServerRes
 
 raftAPI :: Proxy RaftAPI
 raftAPI = Proxy
 
 -- A client for our API
-(sendAppendEntriesReq :<|> sendAppendEntriesRes :<|> sendRequestVoteReq :<|> sendRequestVoteRes :<|> sendClientRequest) =
+(sendAppendEntriesReq :<|> sendAppendEntriesRes :<|> sendRequestVoteReq :<|> sendRequestVoteRes :<|> sendClientRequest :<|> sendAddServer) =
   client raftAPI

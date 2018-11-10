@@ -1,15 +1,17 @@
-import Control.Monad.Logger
-import Control.Monad.State.Strict
-import Data.Functor.Identity
-import qualified Data.HashMap.Strict as Map
-import Data.List (find, intersperse, partition, sortOn)
-import Data.Maybe (fromJust, mapMaybe)
-import Data.Word
-import System.Random (randomRIO)
+import           Control.Monad.Logger
+import           Control.Monad.State.Strict
+import           Data.Functor.Identity
+import qualified Data.HashMap.Strict        as Map
+import           Data.List                  (find, intersperse, partition,
+                                             sortOn)
+import           Data.Maybe                 (fromJust, mapMaybe)
+import           Data.Word
+import           System.Random              (randomRIO)
 
 import           Raft
-import Raft.Log (LogEntry)
 import           Raft.Lens                  hiding (apply)
+import           Raft.Log                   (LogEntry, LogPayload (..),
+                                             ServerId (..))
 import           Raft.Rpc
 import           Raft.Server                hiding (apply)
 
@@ -130,7 +132,7 @@ isClientResponse :: Message a b -> Bool
 isClientResponse m =
   case m of
     CRes {} -> True
-    _ -> False
+    _       -> False
 
 handleClientRedirects ::
      Message Command Response
@@ -144,7 +146,7 @@ handleClientRedirects (CRes ClientResFailure {_leader = Just l, _responseId = i}
       fromJust $ find (\(CReq req) -> req ^. clientRequestId == i) clientReqs
     clientReqs = filter isClientRequest clientMessages_
     isClientRequest (CReq _) = True
-    isClientRequest _ = False
+    isClientRequest _        = False
     clientMessages_ = map (\(_, _, x) -> x) clientMessages
 handleClientRedirects _ = Nothing
 
@@ -158,16 +160,17 @@ pShow hmap =
         let roleS =
               case state ^. role of
                 Leader -> "L"
-                _ -> "F"
+                _      -> "F"
             log =
               (mconcat . intersperse "|") $ fmap pShowEntry (state ^. entryLog)
         in roleS ++ " " ++ log
       pShowEntry :: LogEntry Command -> String
-      pShowEntry e = pShowCommand (e ^. command)
-      pShowCommand c =
+      pShowEntry e = pShowPayload (e ^. payload)
+      pShowPayload c =
         case c of
-          NoOp -> "∅"
-          Set n -> "->" ++ show n
+          LogCommand NoOp    -> "∅"
+          LogCommand (Set n) -> "->" ++ show n
+          _                  -> "?"
       pShowMachine m = "=" ++ show (value m)
   in (unwords . intersperse " ") f
 

@@ -113,15 +113,17 @@ deriving instance (Eq b) => Eq (ClientRes b)
 data AddServerReq = AddServerReq
   -- address of server to add to configuration
   { _newServer :: ServerId
+  , _requestId :: RequestId
   } deriving (Generic, Eq, Show)
 
 instance Binary AddServerReq
 
 data AddServerRes = AddServerRes
   -- the outcome of the operation
-  { _status :: AddServerStatus
+  { _status     :: AddServerStatus
   -- the address of the recent leader, if known
   , _leaderHint :: Maybe ServerId
+  , _requestId  :: RequestId
   } deriving (Generic, Eq, Show)
 
 instance Binary AddServerRes

@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveGeneric              #-}
+{-# LANGUAGE DuplicateRecordFields      #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Raft.Server where
@@ -13,13 +13,6 @@ import           GHC.Generics
 import           System.Random
 
 import           Raft.Log
-
-newtype ServerId = ServerId
-  { unServerId :: String
-  } deriving (Eq, Ord, Generic, Hashable, Typeable, Binary)
-
-instance Show ServerId where
-  show ServerId { unServerId = i } = show i
 
 newtype MonotonicCounter = MonotonicCounter
   { unMonotonicCounter :: Integer
@@ -72,15 +65,21 @@ data ServerState a b machineM = ServerState
   -- state machine via the machineM monad
   , _apply            :: a -> machineM b
   -- [LEADER] The current status of a new server addition, if one is being added.
-  , _serverAddition :: Maybe ServerAddition
+  , _serverAddition   :: Maybe ServerAddition
+  -- The minimum votes required for the node to declare itself leader
+  -- We set this to 1 for the first node in the cluster, then 2 for every subsequent node.
+  -- This prevents new joiners from forming their own 1-node cluster and refusing to join
+  -- the existing one.
+  , _minVotes         :: Int
   }
 
 data ServerAddition = ServerAddition
-  { _newServer :: ServerId,
-    _maxRounds :: Int,
-    _currentRound :: Int,
-    _roundIndex :: LogIndex,
-    _roundTimer :: MonotonicCounter
+  { _newServer    :: ServerId
+  , _maxRounds    :: Int
+  , _currentRound :: Int
+  , _roundIndex   :: LogIndex
+  , _roundTimer   :: MonotonicCounter
+  , _requestId    :: RequestId
   }
 
 data Timeout = Timeout { low :: Int, high :: Int, gen :: StdGen } deriving (Show)
@@ -102,14 +101,14 @@ readTimeout :: Timeout -> MonotonicCounter
 readTimeout t = MonotonicCounter (toInteger r)
   where r = fst $ randomR (low t, high t) (gen t)
 
-mkServerState :: ServerId -> [ServerId] -> (Int, Int, Int) -> MonotonicCounter -> a -> (a -> m b) -> ServerState a b m
-mkServerState self others (electLow, electHigh, electSeed) hbTimeout firstCommand apply = s
+mkServerState :: ServerId -> [ServerId] -> Int -> (Int, Int, Int) -> MonotonicCounter -> [a] -> (a -> m b) -> ServerState a b m
+mkServerState self others minVotes (electLow, electHigh, electSeed) hbTimeout initialCommands apply = s
   where s = ServerState { _selfId = self
                         , _serverIds = others
                         , _leaderId = Nothing
                         , _serverTerm = 0
                         , _votedFor = Nothing
-                        , _entryLog = emptyLog
+                        , _entryLog = initialLogs
                         , _commitIndex = 0
                         , _lastApplied = 0
                         , _electionTimer = 0
@@ -122,6 +121,7 @@ mkServerState self others (electLow, electHigh, electSeed) hbTimeout firstComman
                         , _votesReceived = 0
                         , _apply = apply
                         , _serverAddition = Nothing
+                        , _minVotes = minVotes
                         }
-        emptyLog = [LogEntry { _index = 0, _term = 0, _command = firstCommand, _requestId = 0 }]
+        initialLogs = map (\(cmd, i) -> LogEntry { _index = i, _term = 0, _payload = LogCommand cmd, _requestId = RequestId i }) (zip initialCommands [0..(toInteger (length initialCommands))])
         initialMap = foldl' (\m sid -> Map.insert sid 0 m) Map.empty others

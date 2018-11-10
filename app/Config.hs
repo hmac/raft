@@ -2,11 +2,13 @@
 
 module Config (ClusterConfig(..), NodeConfig(..), parseConfig) where
 
-import           Dhall
 import qualified Data.Text as T
+import           Dhall
 
-newtype ClusterConfig = ClusterConfig { nodes :: [NodeConfig] } deriving (Show, Eq, Generic)
-data NodeConfig = NodeConfig { address :: String } deriving (Show, Eq, Generic)
+data ClusterConfig = ClusterConfig { nodes    :: [NodeConfig]
+                                   , minNodes :: Natural
+                                   } deriving (Show, Eq, Generic)
+newtype NodeConfig = NodeConfig { address :: String } deriving (Show, Eq, Generic)
 instance Interpret ClusterConfig
 instance Interpret NodeConfig
 
