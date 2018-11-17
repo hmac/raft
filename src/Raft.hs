@@ -9,7 +9,7 @@ module Raft (handleMessage, Message(..), ServerT, ExtServerT) where
 
 import           Control.Lens                (at, over, use, (%=), (.=), (<+=),
                                               (?=), (^.))
-import           Control.Monad.State.Strict
+import           Control.Monad.State.Strict  hiding (state)
 import           Control.Monad.Writer.Strict
 import           Data.Binary                 (Binary)
 import           Data.HashMap.Strict         (HashMap)
@@ -72,8 +72,9 @@ handleMessage m = snd <$> runWriterT go
         RVReq r -> checkForNewTerm (r^.candidateTerm) >> handleRequestVoteReq (r^.from) (r^.to) r
         RVRes r -> checkForNewTerm (r^.voterTerm) >> handleRequestVoteRes (r^.from) (r^.to) r
         CReq r -> handleClientRequest r
-        CRes r -> undefined -- what should we do here?
+        CRes _ -> undefined -- what should we do here?
         ASReq r -> handleAddServerReq (r^.requestId) (r^.newServer)
+        ASRes _ -> undefined -- and here?
 
 handleTick :: MonadLogger m => ServerT a b m ()
 handleTick = do
@@ -82,24 +83,24 @@ handleTick = do
   applyCommittedLogEntries
   electionTimer' <- electionTimer <+= 1
   heartbeatTimer' <- heartbeatTimer <+= 1
-  role <- use role
+  r <- use role
   electTimeout <- readTimeout <$> use electionTimeout
   hbTimeout <- use heartbeatTimeout
-  when (electionTimer' >= electTimeout && role /= Leader) convertToCandidate
-  when (heartbeatTimer' >= hbTimeout && role == Leader) sendHeartbeats
+  when (electionTimer' >= electTimeout && r /= Leader) convertToCandidate
+  when (heartbeatTimer' >= hbTimeout && r == Leader) sendHeartbeats
   -- Increment server addition timer, if present
   serverAddition %= fmap (over roundTimer (+1))
 
 handleAppendEntriesReq :: MonadLogger m => ServerId -> ServerId -> AppendEntriesReq a -> ServerT a b m ()
-handleAppendEntriesReq from to r = do
-  success <- handleAppendEntries r
+handleAppendEntriesReq fromAddr toAddr r = do
+  successful <- handleAppendEntries r
   electionTimer .= 0
   updatedTerm <- use serverTerm
   lastLog <- last <$> use entryLog
-  tell1 $ AERes AppendEntriesRes { _from = to
-                                 , _to = from
+  tell1 $ AERes AppendEntriesRes { _from = toAddr
+                                 , _to = fromAddr
                                  , _term = updatedTerm
-                                 , _success = success
+                                 , _success = successful
                                  , _logIndex = lastLog^.index }
 
 checkForNewTerm :: MonadLogger m => Term -> ServerT a b m ()
@@ -112,42 +113,42 @@ checkForNewTerm rpcTerm = do
     when notFollower convertToFollower
 
 handleAppendEntriesRes :: MonadLogger m => ServerId -> ServerId -> AppendEntriesRes -> ServerT a b m ()
-handleAppendEntriesRes from to r = do
+handleAppendEntriesRes fromAddr toAddr r = do
   isLeader <- (== Leader) <$> use role
   when isLeader $ do
     -- If this RPC is from a server that we're trying to add to the cluster, treat it
     -- differently
     addition <- use serverAddition
     case addition of
-      Just add -> if add^.newServer == from
-                     then handleCatchupAppendEntriesRes from to r add
-                     else handleNormalAppendEntriesRes from to r
-      Nothing -> handleNormalAppendEntriesRes from to r
+      Just add -> if add^.newServer == fromAddr
+                     then handleCatchupAppendEntriesRes fromAddr toAddr r add
+                     else handleNormalAppendEntriesRes fromAddr toAddr r
+      Nothing -> handleNormalAppendEntriesRes fromAddr toAddr r
 
 handleNormalAppendEntriesRes :: MonadLogger m => ServerId -> ServerId -> AppendEntriesRes -> ServerT a b m ()
-handleNormalAppendEntriesRes from to r = do
+handleNormalAppendEntriesRes fromAddr _toAddr r = do
   -- update nextIndex and matchIndex for follower
   -- the follower has told us what its most recent log entry is,
   -- so we set matchIndex equal to that and nextIndex to the index after that.
   -- matchIndex[followerId] := RPC.index
   -- nextIndex[followerId] := RPC.index + 1
-  next <- use $ nextIndex . at from
-  match <- use $ matchIndex . at from
+  next <- use $ nextIndex . at fromAddr
+  match <- use $ matchIndex . at fromAddr
   case (next, match) of
-    (Just n, Just m) -> do
-      nextIndex . at from ?= r^.logIndex + 1
-      matchIndex . at from ?= r^.logIndex
+    (Just _, Just _) -> do
+      nextIndex . at fromAddr ?= r^.logIndex + 1
+      matchIndex . at fromAddr ?= r^.logIndex
       checkCommitIndex
       applyCommittedLogEntries
-      unless (r^.success) $ sendAppendEntries from (r^.logIndex + 1)
+      unless (r^.success) $ sendAppendEntries fromAddr (r^.logIndex + 1)
     _ -> error "expected nextIndex and matchIndex to have element!"
 
 handleCatchupAppendEntriesRes :: MonadLogger m => ServerId -> ServerId -> AppendEntriesRes -> ServerAddition -> ServerT a b m ()
-handleCatchupAppendEntriesRes from to r addition = do
+handleCatchupAppendEntriesRes fromAddr toAddr r addition = do
   logInfoN "Handling AppendEntries from new server that is catching up"
   -- update nextIndex and matchIndex
-  nextIndex . at from ?= r^.logIndex + 1
-  matchIndex . at from ?= r^.logIndex
+  nextIndex . at fromAddr ?= r^.logIndex + 1
+  matchIndex . at fromAddr ?= r^.logIndex
 
   -- check if max rounds reached
   eTimeout <- readTimeout <$> use electionTimeout
@@ -155,9 +156,9 @@ handleCatchupAppendEntriesRes from to r addition = do
   then do
     logInfoN "Max rounds exhausted"
     serverAddition .= Nothing
-    nextIndex %= Map.delete from
-    matchIndex %= Map.delete from
-    tell1 $ ASRes AddServerRes { _leaderHint = Just to, _status = AddServerTimeout, _requestId = addition^.requestId }
+    nextIndex %= Map.delete fromAddr
+    matchIndex %= Map.delete fromAddr
+    tell1 $ ASRes AddServerRes { _leaderHint = Just toAddr, _status = AddServerTimeout, _requestId = addition^.requestId }
   else do
     -- check for round completion
     if addition^.roundIndex == r^.logIndex
@@ -181,39 +182,38 @@ handleCatchupAppendEntriesRes from to r addition = do
                                          , _roundIndex = mostRecentLogIndex
                                          , _roundTimer = 0
                                          }
-        sendAppendEntries from (r^.logIndex + 1)
+        sendAppendEntries fromAddr (r^.logIndex + 1)
     else
       -- (roundTimer . addition) += 1
-      sendAppendEntries from (r^.logIndex + 1)
+      sendAppendEntries fromAddr (r^.logIndex + 1)
 
 
 handleRequestVoteReq :: MonadLogger m => ServerId -> ServerId -> RequestVoteReq -> ServerT a b m ()
-handleRequestVoteReq from to r = do
-  logInfoN (T.pack $ "Received RequestVoteReq from " ++ show from)
+handleRequestVoteReq fromAddr toAddr r = do
+  logInfoN (T.pack $ "Received RequestVoteReq from " ++ show fromAddr)
   voteGranted <- handleRequestVote r
   updatedTerm <- use serverTerm
-  logInfoN (T.pack $ "Sending RequestVoteRes from " ++ show from ++ " to " ++ show to)
-  tell1 $ RVRes RequestVoteRes { _from = to , _to = from , _voterTerm = updatedTerm , _requestVoteSuccess = voteGranted }
+  logInfoN (T.pack $ "Sending RequestVoteRes from " ++ show fromAddr ++ " to " ++ show toAddr)
+  tell1 $ RVRes RequestVoteRes { _from = toAddr , _to = fromAddr , _voterTerm = updatedTerm , _requestVoteSuccess = voteGranted }
 
 handleRequestVoteRes :: MonadLogger m => ServerId -> ServerId -> RequestVoteRes -> ServerT a b m ()
-handleRequestVoteRes from to r = do
+handleRequestVoteRes fromAddr toAddr r = do
   let voteGranted = r^.requestVoteSuccess
   isCandidate <- (== Candidate) <$> use role
-  unless isCandidate $ logInfoN (T.pack $ "Ignoring RequestVoteRes from " ++ show from ++ ": not candidate")
-  logInfoN (T.pack $ "Received RequestVoteRes from " ++ show from ++ ", to " ++ show to ++ ", vote granted: " ++ show voteGranted)
+  unless isCandidate $ logInfoN (T.pack $ "Ignoring RequestVoteRes from " ++ show fromAddr ++ ": not candidate")
+  logInfoN (T.pack $ "Received RequestVoteRes from " ++ show fromAddr ++ ", to " ++ show toAddr ++ ", vote granted: " ++ show voteGranted)
   when (isCandidate && voteGranted) $ do
     votes <- (+1) <$> use votesReceived
-    total <- (+ 1) . length <$> use serverIds
     votesReceived .= votes
     logInfoN (T.pack $ "received " ++ show votes ++ " votes")
     minimumVotes <- use minVotes
     checkForElectionVictory minimumVotes
 
 checkForElectionVictory :: MonadLogger m => Int -> ServerT a b m ()
-checkForElectionVictory minVotes = do
+checkForElectionVictory minNumberOfVotes = do
   votes <- use votesReceived
   total <- (+ 1) . length <$> use serverIds
-  when ((votes % total > 1 % 2) && (votes >= minVotes)) $ do
+  when ((votes % total > 1 % 2) && (votes >= minNumberOfVotes)) $ do
     logInfoN (T.pack $ "obtained " ++ show (votes % total) ++ " majority")
     convertToLeader
 
@@ -221,20 +221,19 @@ handleClientRequest :: MonadLogger m => ClientReq a -> ServerT a b m ()
 handleClientRequest r = do
   let c = r^.requestPayload
       reqId = r^.clientRequestId
-  role <- use role
-  leaderId <- use leaderId
-  self <- use selfId
-  case (role, leaderId) of
+  currentRole <- use role
+  leaderAddr <- use leaderId
+  case (currentRole, leaderAddr) of
     (Leader, _) -> do
       logInfoN "responding to client request"
       log <- use entryLog
       currentTerm <- use serverTerm
-      let nextIndex = toInteger $ length log
-          entry = LogEntry { _index = nextIndex , _term = currentTerm , _payload = LogCommand c , _requestId = reqId}
-      entryLog %= \log -> log ++ [entry]
+      let nextLogIndex = toInteger $ length log
+          entry = LogEntry { _index = nextLogIndex , _term = currentTerm , _payload = LogCommand c , _requestId = reqId}
+      entryLog %= \l -> l ++ [entry]
       -- broadcast this new entry to followers
-      serverIds <- use serverIds
-      mapM_ (`sendAppendEntries` nextIndex) serverIds
+      sids <- use serverIds
+      mapM_ (`sendAppendEntries` nextLogIndex) sids
       -- Shortcut for when we're the only node in the cluster
       checkCommitIndex
       applyCommittedLogEntries
@@ -320,15 +319,14 @@ handleRequestVote r = do
               pure False
 
 handleAddServerReq :: MonadLogger m => RequestId -> ServerId -> ServerT a b m ()
-handleAddServerReq reqId newServer = do
+handleAddServerReq reqId newServerAddr = do
   isLeader <- (== Leader) <$> use role
-  leader <- use leaderId
   if isLeader
   then do
     -- Set up ServerAddition
     mostRecentLogIndex <- (\x -> x - 1) . toInteger . length <$> use entryLog
     serverAddition .= Just ServerAddition
-      { _newServer = newServer
+      { _newServer = newServerAddr
       , _maxRounds = 10
       , _currentRound = 1
       , _roundIndex = mostRecentLogIndex
@@ -337,13 +335,14 @@ handleAddServerReq reqId newServer = do
       }
 
     -- Add server to nextIndex and matchIndex
-    nextIndex %= (Map.insert newServer 0)
-    matchIndex %= (Map.insert newServer 0)
+    nextIndex %= (Map.insert newServerAddr 0)
+    matchIndex %= (Map.insert newServerAddr 0)
 
     -- Send single AppendEntriesReq to server
-    sendAppendEntries newServer mostRecentLogIndex
+    sendAppendEntries newServerAddr mostRecentLogIndex
   else do
-    tell1 $ ASRes AddServerRes { _status = AddServerNotLeader, _leaderHint = leader, _requestId = reqId }
+    l <- use leaderId
+    tell1 $ ASRes AddServerRes { _status = AddServerNotLeader, _leaderHint = l, _requestId = reqId }
     pure ()
 
 -- Raft determines which of two logs is more up-to-date by comparing the index
@@ -352,12 +351,12 @@ handleAddServerReq reqId newServer = do
 -- If the logs end with the same term, then whichever log is longer is more
 -- up-to-date.
 upToDate :: LogIndex -> Term -> Log a -> Bool
-upToDate candidateIndex candidateTerm log =
-  case compare candidateTerm (lastEntry^.term) of
+upToDate logAIndex logATerm logB =
+  case compare logATerm (lastEntry^.term) of
     GT -> True
     LT -> False
-    EQ -> candidateIndex >= lastEntry^.index
-  where lastEntry = last log
+    EQ -> logAIndex >= lastEntry^.index
+  where lastEntry = last logB
 
 findEntry :: Log a -> LogIndex -> Term -> Maybe (LogEntry a)
 findEntry l i t =
@@ -425,35 +424,28 @@ convertToLeader = do
   matchIndex .= mkMatchIndex sids
 
   sendHeartbeats
-  where mkNextIndex :: LogIndex -> [ServerId] -> Map.HashMap ServerId LogIndex
-        mkNextIndex logIndex = foldl (\m sid -> Map.insert sid (logIndex + 1) m) Map.empty
-        mkMatchIndex :: [ServerId] -> Map.HashMap ServerId LogIndex
+  where mkNextIndex :: LogIndex -> [ServerId] -> HashMap ServerId LogIndex
+        mkNextIndex i = foldl (\m sid -> Map.insert sid (i + 1) m) Map.empty
+        mkMatchIndex :: [ServerId] -> HashMap ServerId LogIndex
         mkMatchIndex = foldl (\m sid -> Map.insert sid 0 m) Map.empty
 
 sendHeartbeats :: MonadLogger m => ServerT a b m ()
 sendHeartbeats = do
-  -- logInfoN ["sending heartbeats"]
   servers <- use serverIds
-  currentTerm <- use serverTerm
-  selfId <- use selfId
-  commitIndex <- use commitIndex
   log <- use entryLog
   state <- get
   let lastEntry = last log
-      mkHeartbeat to = AEReq $ mkAppendEntries state to lastEntry []
+      mkHeartbeat toAddr = AEReq $ mkAppendEntries state toAddr lastEntry []
   tell $ map mkHeartbeat servers
   heartbeatTimer .= 0
 
 sendAppendEntries :: MonadLogger m => ServerId -> LogIndex -> ServerT a b m ()
-sendAppendEntries followerId logIndex = do
-  logInfoN $ T.unwords ["Sending AppendEntries to", (T.pack . show) followerId, "for log", (T.pack . show) logIndex]
-  currentTerm <- use serverTerm
-  selfId <- use selfId
+sendAppendEntries followerId nextLogIndex = do
+  logInfoN $ T.unwords ["Sending AppendEntries to", (T.pack . show) followerId, "for log", (T.pack . show) nextLogIndex]
   log <- use entryLog
-  commitIndex <- use commitIndex
   state <- get
-  let entry = log `Safe.at` fromInteger logIndex
-      prevEntry = log `Safe.at` fromInteger (logIndex - 1)
+  let entry = log `Safe.at` fromInteger nextLogIndex
+      prevEntry = log `Safe.at` fromInteger (nextLogIndex - 1)
       req = AEReq $ mkAppendEntries state followerId prevEntry [entry]
   tell1 req
   heartbeatTimer .= 0
@@ -470,7 +462,7 @@ checkCommitIndex :: MonadLogger m => ServerT a b m ()
 checkCommitIndex = do
   log <- use entryLog
   currentTerm <- use serverTerm
-  matchIndex <- use matchIndex
+  matchIndex_ <- use matchIndex
   cIndex <- use commitIndex
   let entrym = headMay $ filter ((> cIndex) . (^.index)) $ filter ((== currentTerm) . (^.term)) log
   case fmap (^.index) entrym of
@@ -479,9 +471,9 @@ checkCommitIndex = do
       -- matchIndex currently doesn't include the current server, so we also check
       -- if we are up to date, and include that accordingly
       let selfUpToDate = if length log >= fromInteger n then 1 else 0
-          upToDate = selfUpToDate + Map.size (Map.filter (>= n) matchIndex)
-          total = Map.size matchIndex + 1
-          majorityUpToDate = (upToDate % total) > (1 % 2)
+          numServersUpToDate = selfUpToDate + Map.size (Map.filter (>= n) matchIndex_)
+          total = Map.size matchIndex_ + 1
+          majorityUpToDate = (numServersUpToDate % total) > (1 % 2)
           entryAtN = atMay log (fromInteger n)
       case entryAtN of
         Nothing -> pure ()
@@ -496,27 +488,26 @@ checkCommitIndex = do
 --   broadcast "log applied" event (this is a form of client response)
 applyCommittedLogEntries :: MonadLogger m => ServerT a b m ()
 applyCommittedLogEntries = do
-  apply <- use apply
+  applyFn <- use apply
   lastAppliedIndex <- use lastApplied
   lastCommittedIndex <- use commitIndex
   log <- use entryLog
-  self <- use selfId
   when (lastCommittedIndex > lastAppliedIndex) $ do
     lastApplied' <- lastApplied <+= 1
     let entry = fromJust $ findByIndex log lastApplied'
     case entry^.payload of
-      LogConfig config -> do
+      LogConfig _ -> do
         logInfoN (T.pack $ "committing config change from entry " ++ show (entry^.index))
       LogCommand cmd -> do
         logInfoN (T.pack $ "applying entry " ++ show (entry^.index))
-        res <- (lift . lift) $ apply cmd
+        res <- (lift . lift) $ applyFn cmd
         tell1 $ CRes
           ClientResSuccess {_responsePayload = Right res, _responseId = entry^.requestId}
 
 mkAppendEntries :: ServerState a b m -> ServerId -> LogEntry a -> [LogEntry a] -> AppendEntriesReq a
-mkAppendEntries s to prevEntry newEntries =
+mkAppendEntries s toAddr prevEntry newEntries =
   AppendEntriesReq { _from = s^.selfId
-                   , _to = to
+                   , _to = toAddr
                    , _leaderTerm = s^.serverTerm
                    , _prevLogIndex = prevEntry^.index
                    , _prevLogTerm = prevEntry^.term

@@ -2,17 +2,12 @@
 {-# LANGUAGE NamedFieldPuns        #-}
 module Client where
 
-import           Data.List           (find)
-import           Data.Maybe          (fromMaybe)
 import qualified Data.Text.IO        as T (putStrLn)
-import           Network.HTTP.Client (Manager, defaultManagerSettings,
-                                      newManager)
-import           Servant
+import           Network.HTTP.Client (defaultManagerSettings, newManager)
 import           Servant.Client
 import           System.Random
 
 import qualified Api
-import           Config
 import           Raft.Log            (RequestId (RequestId), ServerId (..))
 import           Raft.Rpc            (AddServerReq (..), AddServerRes (..),
                                       AddServerStatus (..), ClientReq (..),

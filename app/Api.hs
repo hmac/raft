@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Wno-missing-signatures #-}
 {-# LANGUAGE DataKinds         #-}
 {-# LANGUAGE DeriveAnyClass    #-}
 {-# LANGUAGE DeriveGeneric     #-}
@@ -16,14 +17,10 @@ import           Servant
 import           Servant.Client             (client)
 
 import qualified Raft                       (Message (..))
-import           Raft.Log                   (Config, LogEntry, LogIndex,
-                                             LogPayload (..), RequestId,
-                                             ServerId (..), Term, unRequestId)
 import qualified Raft.Rpc                   as Rpc
-import           Raft.Server                (MonotonicCounter (..), ServerState)
 
 -- State machine
-newtype StateMachine = StateMachine (HM.HashMap String String) deriving (Eq, Show)
+newtype StateMachine = StateMachine (HashMap String String) deriving (Eq, Show)
 type StateMachineT m = StateT StateMachine m
 
 -- A command set for the state machine
@@ -94,38 +91,6 @@ instance RaftMessage Rpc.AddServerRes where
   toRaftMessage = Raft.ASRes
   fromRaftMessage (Raft.ASRes r) = Just r
   fromRaftMessage _              = Nothing
-
--- Required additional To/FromJSON instances
-instance ToJSON ServerId
-instance FromJSON ServerId
-instance ToJSON Term
-instance FromJSON Term
-instance ToJSON RequestId
-instance FromJSON RequestId
-instance ToJSON Config
-instance FromJSON Config
-instance ToJSON a => ToJSON (LogPayload a)
-instance FromJSON a => FromJSON (LogPayload a)
-instance ToJSON a => ToJSON (LogEntry a)
-instance FromJSON a => FromJSON (LogEntry a)
-instance ToJSON a => ToJSON (Rpc.AppendEntriesReq a)
-instance FromJSON a => FromJSON (Rpc.AppendEntriesReq a)
-instance ToJSON Rpc.AppendEntriesRes
-instance FromJSON Rpc.AppendEntriesRes
-instance ToJSON Rpc.RequestVoteReq
-instance FromJSON Rpc.RequestVoteReq
-instance ToJSON Rpc.RequestVoteRes
-instance FromJSON Rpc.RequestVoteRes
-instance ToJSON a => ToJSON (Rpc.ClientReq a)
-instance FromJSON a => FromJSON (Rpc.ClientReq a)
-instance ToJSON b => ToJSON (Rpc.ClientRes b)
-instance FromJSON b => FromJSON (Rpc.ClientRes b)
-instance ToJSON Rpc.AddServerReq
-instance FromJSON Rpc.AddServerReq
-instance ToJSON Rpc.AddServerRes
-instance FromJSON Rpc.AddServerRes
-instance ToJSON Rpc.AddServerStatus
-instance FromJSON Rpc.AddServerStatus
 
 -- Our API
 type RaftAPI = "AppendEntriesRequest" :> ReqBody '[JSON] (Rpc.AppendEntriesReq Command) :> Post '[JSON] ()

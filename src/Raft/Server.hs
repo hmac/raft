@@ -3,13 +3,8 @@
 
 module Raft.Server where
 
-import           Control.Lens
-import           Data.Binary         (Binary)
 import           Data.Foldable       (foldl')
-import           Data.Hashable       (Hashable)
 import qualified Data.HashMap.Strict as Map
-import           Data.Typeable       (Typeable)
-import           GHC.Generics
 import           System.Random
 
 import           Raft.Log
@@ -18,7 +13,12 @@ newtype MonotonicCounter = MonotonicCounter
   { unMonotonicCounter :: Integer
   } deriving (Eq, Ord, Num, Show)
 
-data Role = Follower | Candidate | Leader deriving (Eq, Show)
+data Role
+  = Follower
+  | Candidate
+  | Leader
+  | Bootstrap
+  deriving (Eq, Show)
 
 data ServerState a b machineM = ServerState
   -- the server's ID

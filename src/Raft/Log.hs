@@ -1,11 +1,10 @@
 {-# LANGUAGE DeriveGeneric              #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE StandaloneDeriving         #-}
-{-# LANGUAGE TemplateHaskell            #-}
 
 module Raft.Log where
 
-import           Control.Lens
+import           Data.Aeson    (FromJSON, ToJSON)
 import           Data.Binary   (Binary)
 import           Data.Hashable (Hashable)
 import           Data.Typeable (Typeable)
@@ -14,6 +13,8 @@ import           GHC.Generics  (Generic)
 newtype ServerId = ServerId
   { unServerId :: String
   } deriving (Eq, Ord, Generic, Hashable, Typeable, Binary)
+instance ToJSON ServerId
+instance FromJSON ServerId
 
 instance Show ServerId where
   show ServerId { unServerId = i } = show i
@@ -23,6 +24,8 @@ newtype Term = Term
   } deriving (Eq, Ord, Generic, Num)
 
 instance Binary Term
+instance ToJSON Term
+instance FromJSON Term
 
 instance Show Term where
   show Term {unTerm = t} = show t
@@ -36,9 +39,13 @@ type LogIndex = Integer
 newtype RequestId = RequestId
   { unRequestId :: Integer
   } deriving (Eq, Ord, Num, Show, Generic, Typeable, Binary, Hashable)
+instance ToJSON RequestId
+instance FromJSON RequestId
 
 newtype Config = Config [ServerId]
   deriving (Eq, Show, Generic)
+instance ToJSON Config
+instance FromJSON Config
 
 instance Binary Config
 
@@ -51,6 +58,8 @@ data LogEntry a
   deriving (Generic)
 
 instance Binary a => Binary (LogEntry a)
+instance ToJSON a => ToJSON (LogEntry a)
+instance FromJSON a => FromJSON (LogEntry a)
 
 data LogPayload a
   = LogCommand a
@@ -58,6 +67,8 @@ data LogPayload a
   deriving (Generic, Show, Eq)
 
 instance Binary a => Binary (LogPayload a)
+instance ToJSON a => ToJSON (LogPayload a)
+instance FromJSON a => FromJSON (LogPayload a)
 
 deriving instance (Show a) => Show (LogEntry a)
 

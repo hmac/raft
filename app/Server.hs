@@ -6,16 +6,15 @@ module Server (runServer) where
 import           Control.Concurrent            (ThreadId, forkIO, threadDelay)
 import           Control.Concurrent.STM.TChan  (TChan, newTChan, readTChan,
                                                 writeTChan)
-import           Control.Concurrent.STM.TMChan (TMChan, closeTMChan, newTMChan,
-                                                readTMChan, writeTMChan)
+import           Control.Concurrent.STM.TMChan (TMChan, newTMChan, readTMChan,
+                                                writeTMChan)
 import           Control.Concurrent.STM.TVar   (TVar, modifyTVar', newTVar,
                                                 readTVar, readTVarIO, writeTVar)
-import           Control.Monad.STM             (STM, atomically, retry)
+import           Control.Monad.STM             (STM, atomically)
 
 import           Control.Lens                  (set)
 import           Control.Monad.Logger
 import           Control.Monad.State.Strict    hiding (state)
-import           Data.List                     (find)
 import           Data.Map.Strict               (Map)
 import qualified Data.Map.Strict               as Map
 import qualified Data.Text                     as T
@@ -66,7 +65,7 @@ processMessage Config { state, queue } msg = do
   mapM_ (uncurry4 monadLoggerLog) logs
   where
     handleMessage_ :: RaftServer -> StateMachine -> Message -> WriterLoggingT STM (([Message], RaftServer), StateMachine)
-    handleMessage_ server machine msg = runStateT (runStateT (Raft.handleMessage msg) server) machine
+    handleMessage_ server machine m = runStateT (runStateT (Raft.handleMessage m) server) machine
     uncurry4 :: (a -> b -> c -> d -> e) -> (a, b, c, d) -> e
     uncurry4 f (w, x, y, z) = f w x y z
 
@@ -74,14 +73,17 @@ processTick :: Config -> LoggingT IO ()
 processTick config = processMessage config Raft.Tick
 
 -- A server for our API
-server :: Config -> Server RaftAPI
-server config =
+apiServer :: Config -> Server RaftAPI
+apiServer config =
   serveGeneric config :<|>
   serveGeneric config :<|>
   serveGeneric config :<|>
   serveGeneric config :<|>
   serveClientRequest config :<|>
   serveAddServer config
+
+app :: Config -> Application
+app config = serve raftAPI (apiServer config)
 
 serveGeneric :: RaftMessage a => Config -> a -> Handler ()
 serveGeneric config req = liftIO $ runLogger $ processMessage config (toRaftMessage req)
@@ -137,17 +139,15 @@ serveClientRequest config req = liftIO $ runLogger $ do
       pure r
     _ -> error "No response found"
 
-app :: Config -> Application
-app config = serve raftAPI (server config)
-
 runServer :: String -> ClusterConfig -> IO ()
-runServer selfAddr config = do
+runServer selfAddr bootConfig = do
   self <- parseBaseUrl selfAddr
-  others <- map (ServerId . showBaseUrl) . filter (/= self) <$> mapM (parseBaseUrl . address) (nodes config)
+  -- TODO: remove?
+  -- others <- map (ServerId . showBaseUrl) . filter (/= self) <$> mapM (parseBaseUrl . address) (nodes config)
   seed <- getStdRandom random
   (serverState, queue, reqMap) <- atomically $ do
     -- Raft recommends a 150-300ms range for election timeouts
-    s <- newTVar $ mkServer ((ServerId . showBaseUrl) self) ((fromInteger . toInteger) (minNodes config)) (150, 300, seed) 20
+    s <- newTVar $ mkServer ((ServerId . showBaseUrl) self) ((fromInteger . toInteger) (minNodes bootConfig)) (150, 300, seed) 20
     q <- newTChan
     m <- newTVar Map.empty
     pure (s, q, m)
@@ -210,25 +210,25 @@ sendAddServerResponse config r = do
     Nothing   -> logInfoN "No response channel found - ignoring response"
 
 sendRpc :: Message -> ClientEnv -> Config -> LoggingT IO ()
-sendRpc msg env Config { queue } = do
+sendRpc msg env _config = do
   let
-    (name, rpc) =
+    -- TODO: we don't need name if we're not logging errors here
+    rpc =
         case msg of
-          Raft.RVReq r -> ("RequestVoteReq", sendRequestVoteReq r)
-          Raft.AEReq r -> ("AppendEntriesReq", sendAppendEntriesReq r)
-          Raft.RVRes r -> ("RequestVoteRes", sendRequestVoteRes r)
-          Raft.AERes r -> ("AppendEntriesRes", sendAppendEntriesRes r)
+          Raft.RVReq r -> sendRequestVoteReq r
+          Raft.AEReq r -> sendAppendEntriesReq r
+          Raft.RVRes r -> sendRequestVoteRes r
+          Raft.AERes r -> sendAppendEntriesRes r
           r            -> error $ "Unexpected rpc: " ++ show r
   res <- liftIO $ runClientM rpc env
   case res of
-    Left err -> do
+    Left _err -> pure ()
       -- We could re-enqueue the message for delivery, but for these RPCs it doesn't
       -- really matter, as they'll be resent periodically anyway
       --
       -- logDebugN $ T.concat ["Error sending ", name, "RPC"]
       -- liftIO . atomically $ writeTChan queue msg
-      pure ()
-    Right _  -> pure ()
+    Right _   -> pure ()
 
 mkServer ::
   Monad m =>
@@ -237,14 +237,14 @@ mkServer ::
   -> (Int, Int, Int)
   -> MonotonicCounter
   -> (ServerState Command CommandResponse (StateMachineT m), StateMachine)
-mkServer self minVotes electionTimeout heartbeatTimeout =
+mkServer self minimumVotes eTimeout hbTimeout =
   (serverState, StateMachine mempty)
   where
     -- We start with two no-op logs, so that we can easily replicate logs to new new
     -- nodes. This is a bit of a hack until I figure out how AppendEntries should behave
     -- when you have only one entry in your log.
     serverState =
-      mkServerState self [] minVotes electionTimeout heartbeatTimeout [NoOp, NoOp] apply
+      mkServerState self [] minimumVotes eTimeout hbTimeout [NoOp, NoOp] apply
 
 rpcTo :: Message -> ServerId
 rpcTo msg = case msg of
@@ -252,3 +252,8 @@ rpcTo msg = case msg of
   Raft.AERes r -> r^.to
   Raft.RVReq r -> r^.to
   Raft.RVRes r -> r^.to
+  Raft.ASReq _ -> error "Cannot determine target node for client RPC"
+  Raft.ASRes _ -> error "Cannot determine target node for client RPC"
+  Raft.CReq _  -> error "Cannot determine target node for client RPC"
+  Raft.CRes _  -> error "Cannot determine target node for client RPC"
+  Raft.Tick    -> error "Cannot determine target node for tick"

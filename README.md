@@ -38,6 +38,29 @@ sync clocks, network latency, etc.
 `Message` is parameterised over two types `a` and `b` representing the type of
 state machine commands and return values, respectively.
 
+## Node Roles
+A raft node can play one of four roles:
+```haskell
+data Role
+  = Follower
+  | Candidate
+  | Leader
+  | Bootstrap
+```
+
+- `Follower`: The node has a known leader and listens to RPCs from it, replicating log
+  entries and responding to heartbeats.
+- `Candidate`: The node is attempting to acquire votes from other nodes to become leader.
+- `Leader`: The node has won an election and is responding to client requests and
+  replicating log entries to other nodes in the cluster.
+- `Bootstrap`: The node has just been booted prior to being added to a cluster. It will
+  not call an election or attempt to become leader, but will instead wait for an
+  AppendEntries RPC from a leader. Once it has received an RPC it will convert to a normal
+  follower†.
+
+† This condition may need to be adjusted to ensure the two-phase server addition process
+that Raft uses to prevent split votes.
+
 ## Implemented features
 - A working implementation of the core algorithm (log replication and leader
   election).

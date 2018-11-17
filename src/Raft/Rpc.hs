@@ -18,12 +18,11 @@ module Raft.Rpc (
 )
 where
 
-import           Control.Lens
+import           Data.Aeson   (FromJSON, ToJSON)
 import           Data.Binary  (Binary)
 import qualified Data.Text    as T
 import           GHC.Generics (Generic)
 import           Raft.Log
-import           Raft.Server
 
 data AppendEntriesReq a = AppendEntriesReq
   -- ID of sender
@@ -45,6 +44,8 @@ data AppendEntriesReq a = AppendEntriesReq
 instance Binary a => Binary (AppendEntriesReq a)
 deriving instance (Show a) => Show (AppendEntriesReq a)
 deriving instance (Eq a) => Eq (AppendEntriesReq a)
+instance ToJSON a => ToJSON (AppendEntriesReq a)
+instance FromJSON a => FromJSON (AppendEntriesReq a)
 
 data AppendEntriesRes = AppendEntriesRes
   -- ID of sender
@@ -60,6 +61,8 @@ data AppendEntriesRes = AppendEntriesRes
   } deriving (Generic, Eq, Show)
 
 instance Binary AppendEntriesRes
+instance ToJSON AppendEntriesRes
+instance FromJSON AppendEntriesRes
 
 data RequestVoteReq = RequestVoteReq
   -- ID of sender
@@ -75,6 +78,8 @@ data RequestVoteReq = RequestVoteReq
   } deriving (Generic, Eq, Show)
 
 instance Binary RequestVoteReq
+instance ToJSON RequestVoteReq
+instance FromJSON RequestVoteReq
 
 data RequestVoteRes = RequestVoteRes
   -- ID of sender
@@ -88,6 +93,8 @@ data RequestVoteRes = RequestVoteRes
   } deriving (Generic, Eq, Show)
 
 instance Binary RequestVoteRes
+instance ToJSON RequestVoteRes
+instance FromJSON RequestVoteRes
 
 data ClientReq a = ClientReq
   { _requestPayload  :: a
@@ -97,6 +104,8 @@ data ClientReq a = ClientReq
 instance Binary a => Binary (ClientReq a)
 deriving instance (Show a) => Show (ClientReq a)
 deriving instance (Eq a) => Eq (ClientReq a)
+instance ToJSON a => ToJSON (ClientReq a)
+instance FromJSON a => FromJSON (ClientReq a)
 
 data ClientRes b
   = ClientResSuccess { _responsePayload :: Either T.Text b
@@ -109,6 +118,8 @@ data ClientRes b
 instance Binary b => Binary (ClientRes b)
 deriving instance (Show b) => Show (ClientRes b)
 deriving instance (Eq b) => Eq (ClientRes b)
+instance ToJSON b => ToJSON (ClientRes b)
+instance FromJSON b => FromJSON (ClientRes b)
 
 data AddServerReq = AddServerReq
   -- address of server to add to configuration
@@ -117,6 +128,8 @@ data AddServerReq = AddServerReq
   } deriving (Generic, Eq, Show)
 
 instance Binary AddServerReq
+instance ToJSON AddServerReq
+instance FromJSON AddServerReq
 
 data AddServerRes = AddServerRes
   -- the outcome of the operation
@@ -127,6 +140,8 @@ data AddServerRes = AddServerRes
   } deriving (Generic, Eq, Show)
 
 instance Binary AddServerRes
+instance ToJSON AddServerRes
+instance FromJSON AddServerRes
 
 data AddServerStatus
   -- Server addition was successful
@@ -138,3 +153,5 @@ data AddServerStatus
   deriving (Generic, Eq, Show)
 
 instance Binary AddServerStatus
+instance ToJSON AddServerStatus
+instance FromJSON AddServerStatus
