@@ -98,7 +98,9 @@ To support this, a cluster is constructed by booting each node one at a time and
 each to the cluster separately. The process works roughly like this:
 
 1. Node 1 is booted, forms a cluster of one, and quickly becomes leader.
-2. Node 2 is booted, and forms a separate cluster of one.
+2. Node 2 is booted in "bootstrap mode". In this mode it requires at least two votes to
+   become leader. It will therefore not form a cluster of one but will instead stay in
+   follower mode.
 3. The AddServer RPC call is used to initiate the addition of node 2 to the node 1
    cluster.
 4. Node 1 begins replicating log entries to node 2 until it is up to date. This will be a
@@ -107,10 +109,14 @@ each to the cluster separately. The process works roughly like this:
    be {1, 2}.
 6. Once it is written to the log, this configuration immediately takes effect for node 1.
    At this point, node 2 is considered a full member of the cluster (by node 1, at least).
-7. The new configuration is replicated to node 2, and takes effect immediately after. At
-   this point, node 2 is considered a full member of the cluster by all nodes.
+7. The new configuration is replicated to node 2, and takes effect immediately. The
+   presence of a new configuration causes node 2 to exit bootstrap mode and begin
+   operation as a normal node. At this point, node 2 is considered a full member of the
+   cluster by all nodes.
 8. The AddServer RPC call returns successfully.
 
 In order to support this, we provide no initial cluster configuration to nodes when they
 boot. All they know is their own network address - any further configuration is discovered
-dynamically when they receive RPCs from the cluster leader.
+dynamically when they receive RPCs from the cluster leader. The only boot-time
+configuration is bootstrap mode, which is used for every new node except for the initial
+one.
