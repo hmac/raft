@@ -80,16 +80,17 @@ handleTick :: MonadLogger m => ServerT a b m ()
 handleTick = do
   -- if election timeout elapses without receiving AppendEntriesReq RPC from current
   -- leader or granting vote to candidate, convert to candidate
-  applyCommittedLogEntries
-  electionTimer' <- electionTimer <+= 1
-  heartbeatTimer' <- heartbeatTimer <+= 1
   r <- use role
-  electTimeout <- readTimeout <$> use electionTimeout
-  hbTimeout <- use heartbeatTimeout
-  when (electionTimer' >= electTimeout && r /= Leader) convertToCandidate
-  when (heartbeatTimer' >= hbTimeout && r == Leader) sendHeartbeats
-  -- Increment server addition timer, if present
-  serverAddition %= fmap (over roundTimer (+1))
+  when (r /= Bootstrap) $ do
+    applyCommittedLogEntries
+    electionTimer' <- electionTimer <+= 1
+    heartbeatTimer' <- heartbeatTimer <+= 1
+    electTimeout <- readTimeout <$> use electionTimeout
+    hbTimeout <- use heartbeatTimeout
+    when (electionTimer' >= electTimeout && r /= Leader) convertToCandidate
+    when (heartbeatTimer' >= hbTimeout && r == Leader) sendHeartbeats
+    -- Increment server addition timer, if present
+    serverAddition %= fmap (over roundTimer (+1))
 
 handleAppendEntriesReq :: MonadLogger m => ServerId -> ServerId -> AppendEntriesReq a -> ServerT a b m ()
 handleAppendEntriesReq fromAddr toAddr r = do

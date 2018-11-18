@@ -96,8 +96,8 @@ readTimeout :: Timeout -> MonotonicCounter
 readTimeout t = MonotonicCounter (toInteger r)
   where r = fst $ randomR (low t, high t) (gen t)
 
-mkServerState :: ServerId -> [ServerId] -> (Int, Int, Int) -> MonotonicCounter -> [a] -> (a -> m b) -> ServerState a b m
-mkServerState self others (electLow, electHigh, electSeed) hbTimeout initialCommands apply = s
+mkServerState :: ServerId -> [ServerId] -> (Int, Int, Int) -> MonotonicCounter -> [a] -> (a -> m b) -> Bool -> ServerState a b m
+mkServerState self others (electLow, electHigh, electSeed) hbTimeout initialCommands apply bootstrap = s
   where s = ServerState { _selfId = self
                         , _serverIds = others
                         , _leaderId = Nothing
@@ -110,12 +110,13 @@ mkServerState self others (electLow, electHigh, electSeed) hbTimeout initialComm
                         , _electionTimeout = mkTimeout electLow electHigh electSeed
                         , _heartbeatTimer = 0
                         , _heartbeatTimeout = hbTimeout
-                        , _role = Follower
+                        , _role = initialRole
                         , _nextIndex = initialMap
                         , _matchIndex = initialMap
                         , _votesReceived = 0
                         , _apply = apply
                         , _serverAddition = Nothing
                         }
+        initialRole = if bootstrap then Bootstrap else Follower
         initialLogs = map (\(cmd, i) -> LogEntry { _index = i, _term = 0, _payload = LogCommand cmd, _requestId = RequestId i }) (zip initialCommands [0..(toInteger (length initialCommands))])
         initialMap = foldl' (\m sid -> Map.insert sid 0 m) Map.empty others

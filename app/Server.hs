@@ -139,15 +139,15 @@ serveClientRequest config req = liftIO $ runLogger $ do
       pure r
     _ -> error "No response found"
 
-runServer :: String -> ClusterConfig -> IO ()
-runServer selfAddr _ = do
+runServer :: String -> Bool -> ClusterConfig -> IO ()
+runServer selfAddr bootstrap _ = do
   self <- parseBaseUrl selfAddr
   -- TODO: remove?
   -- others <- map (ServerId . showBaseUrl) . filter (/= self) <$> mapM (parseBaseUrl . address) (nodes config)
   seed <- getStdRandom random
   (serverState, queue, reqMap) <- atomically $ do
     -- Raft recommends a 150-300ms range for election timeouts
-    s <- newTVar $ mkServer ((ServerId . showBaseUrl) self) (150, 300, seed) 20
+    s <- newTVar $ mkServer ((ServerId . showBaseUrl) self) (150, 300, seed) 20 bootstrap
     q <- newTChan
     m <- newTVar Map.empty
     pure (s, q, m)
@@ -235,15 +235,16 @@ mkServer ::
      ServerId
   -> (Int, Int, Int)
   -> MonotonicCounter
+  -> Bool
   -> (ServerState Command CommandResponse (StateMachineT m), StateMachine)
-mkServer self eTimeout hbTimeout =
+mkServer self eTimeout hbTimeout bootstrap =
   (serverState, StateMachine mempty)
   where
     -- We start with two no-op logs, so that we can easily replicate logs to new new
     -- nodes. This is a bit of a hack until I figure out how AppendEntries should behave
     -- when you have only one entry in your log.
     serverState =
-      mkServerState self [] eTimeout hbTimeout [NoOp, NoOp] apply
+      mkServerState self [] eTimeout hbTimeout [NoOp, NoOp] apply bootstrap
 
 rpcTo :: Message -> ServerId
 rpcTo msg = case msg of
