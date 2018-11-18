@@ -42,14 +42,6 @@ newtype RequestId = RequestId
 instance ToJSON RequestId
 instance FromJSON RequestId
 
-newtype Config = Config [ServerId]
-  deriving (Eq, Show, Generic)
-instance ToJSON Config
-instance FromJSON Config
-
-instance Binary Config
-
--- TODO: rename command to payload
 data LogEntry a
   = LogEntry { _index     :: LogIndex
              , _term      :: Term
@@ -63,7 +55,7 @@ instance FromJSON a => FromJSON (LogEntry a)
 
 data LogPayload a
   = LogCommand a
-  | LogConfig Config
+  | LogConfig [ServerId]
   deriving (Generic, Show, Eq)
 
 instance Binary a => Binary (LogPayload a)

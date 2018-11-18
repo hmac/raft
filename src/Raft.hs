@@ -171,6 +171,10 @@ handleCatchupAppendEntriesRes fromAddr toAddr r addition = do
       then do
         logInfoN "New server has caught up - adding it to the cluster"
         logInfoN "NOTE: Cluster configuration changes not yet supported, so actually doing nothing here"
+        currentConfig <- getClusterConfig
+        -- TODO: we should get the request ID from the original AddServer request
+        entry <- mkLogEntry (LogConfig (fromAddr : currentConfig)) 1
+        entryLog %= \l -> l ++ [entry]
         pure ()
       else do
         -- start new round
@@ -188,6 +192,21 @@ handleCatchupAppendEntriesRes fromAddr toAddr r addition = do
       -- (roundTimer . addition) += 1
       sendAppendEntries fromAddr (r^.logIndex + 1)
 
+mkLogEntry :: MonadLogger m => LogPayload a -> RequestId -> ServerT a b m (LogEntry a)
+mkLogEntry entryPayload reqId = do
+  log <- use entryLog
+  currentTerm <- use serverTerm
+  pure $ LogEntry { _index = toInteger (length log)
+                  , _term = currentTerm
+                  , _payload = entryPayload
+                  , _requestId = reqId
+                  }
+
+getClusterConfig :: MonadLogger m => ServerT a b m [ServerId]
+getClusterConfig = do
+  self <- use selfId
+  others <- use serverIds
+  pure (self : others)
 
 handleRequestVoteReq :: MonadLogger m => ServerId -> ServerId -> RequestVoteReq -> ServerT a b m ()
 handleRequestVoteReq fromAddr toAddr r = do
@@ -250,6 +269,7 @@ handleClientRequest r = do
 -- append entries to the log
 -- if leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of
 --   last new entry)
+-- if any of the entries are a cluster config change, apply it
 handleAppendEntries :: MonadLogger m => AppendEntriesReq a -> ServerT a b m Bool
 handleAppendEntries r = do
   log <- use entryLog
@@ -269,7 +289,21 @@ handleAppendEntries r = do
 
       -- Update knowledge of leader
       leaderId .= Just (r^.from)
+
+      -- Apply any cluster config change entries
+      forM_ (r^.entries) $ \e ->
+        case e^.payload of
+          LogConfig sids -> applyClusterConfigChange sids
+          _              -> pure ()
       pure True
+
+applyClusterConfigChange :: MonadLogger m => [ServerId] -> ServerT a b m ()
+applyClusterConfigChange sids = do
+  logDebugN $ T.pack $ "Updating cluster config with new set of servers: " ++ show sids
+  self <- use selfId
+  let others = filter (/= self) sids
+  serverIds .= others
+  pure ()
 
 validateAppendEntries :: Term -> Log a -> AppendEntriesReq a -> Either Text ()
 validateAppendEntries currentTerm log rpc =
