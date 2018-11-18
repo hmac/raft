@@ -206,14 +206,13 @@ handleRequestVoteRes fromAddr toAddr r = do
     votes <- (+1) <$> use votesReceived
     votesReceived .= votes
     logInfoN (T.pack $ "received " ++ show votes ++ " votes")
-    minimumVotes <- use minVotes
-    checkForElectionVictory minimumVotes
+    checkForElectionVictory
 
-checkForElectionVictory :: MonadLogger m => Int -> ServerT a b m ()
-checkForElectionVictory minNumberOfVotes = do
+checkForElectionVictory :: MonadLogger m => ServerT a b m ()
+checkForElectionVictory = do
   votes <- use votesReceived
   total <- (+ 1) . length <$> use serverIds
-  when ((votes % total > 1 % 2) && (votes >= minNumberOfVotes)) $ do
+  when (votes % total > 1 % 2) $ do
     logInfoN (T.pack $ "obtained " ++ show (votes % total) ++ " majority")
     convertToLeader
 
@@ -406,8 +405,7 @@ convertToCandidate = do
   mapM_ (\i -> logInfoN (T.pack $ "Sending RequestVoteReq from self (" ++ show ownId ++ ") to " ++ show i)) servers
   tell $ map (RVReq . rpc) servers
   -- Shortcut for when we're the only node in the cluster
-  minimumVotes <- use minVotes
-  checkForElectionVictory minimumVotes
+  checkForElectionVictory
 
 -- send initial empty AppendEntries RPCs (hearbeats) to each server
 convertToLeader :: MonadLogger m => ServerT a b m ()

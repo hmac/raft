@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Wno-name-shadowing #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 
 import           Control.Monad.Identity
@@ -11,7 +12,7 @@ import           Raft
 import           Raft.Lens                  hiding (apply)
 import           Raft.Log
 import           Raft.Rpc
-import           Raft.Server                hiding (apply, mkServerState)
+import           Raft.Server                hiding (mkServerState)
 import qualified Raft.Server                (mkServerState)
 
 import           Test.Hspec
@@ -53,7 +54,7 @@ mkLogEntry i t = LogEntry { _index = i
 
 mkServerState :: ServerId -> [ServerId] -> Int -> MonotonicCounter -> ServerState Command () StateMachineM
 mkServerState self others electionTimeout heartbeatTimeout =
-  Raft.Server.mkServerState self others 1 (electionTimeout, electionTimeout, 0) heartbeatTimeout [NoOp] apply
+  Raft.Server.mkServerState self others (electionTimeout, electionTimeout, 0) heartbeatTimeout [NoOp] apply
 
 s1 :: ServerId
 s1 = ServerId "http://localhost:10501"
@@ -69,7 +70,6 @@ testElectionTimeout = do
   let mkNode timeout = mkServerState s1 [s2] timeout 10
   context "when a node has not reached its election timeout" $
     it "doesn't call an election" $ do
-      let timeout = 2
       case sendMsg (mkNode 2) Tick of
         (msgs, _) -> msgs `shouldBe` []
   context "when a node reaches its election timeout" $
@@ -210,8 +210,7 @@ testAppendEntriesReq = do
           rpc^.logIndex `shouldBe` 1
           node'^.entryLog `shouldBe` [zerothEntry, firstEntry]
   context "when leaderCommit > node's commitIndex" $ do
-    let zerothEntry = mkLogEntry 0 0
-        firstEntry = mkLogEntry 1 1
+    let firstEntry = mkLogEntry 1 1
         secondEntry = mkLogEntry 2 1
     context "and leaderCommit <= index of last new entry" $ do
       let req = AEReq AppendEntriesReq { _leaderTerm = 1
@@ -252,8 +251,7 @@ testAppendEntriesReq = do
             rpc^.logIndex `shouldBe` 2
             node'^.commitIndex `shouldBe` 2
   context "when leaderCommit <= node's commitIndex" $ do
-    let zerothEntry = mkLogEntry 0 0
-        firstEntry = mkLogEntry 1 1
+    let firstEntry = mkLogEntry 1 1
         secondEntry = mkLogEntry 2 1
         req = AEReq AppendEntriesReq { _leaderTerm = 1
                                      , _from = s2
@@ -399,7 +397,7 @@ testRequestVoteRes = do
                                    , _voterTerm = 1
                                    , _requestVoteSuccess = True
                                    }
-        (msgs, node') = sendMsg node msg
+        (_msgs, node') = sendMsg node msg
     it "increments votesReceived" $ do
       node'^.votesReceived `shouldBe` 2
 

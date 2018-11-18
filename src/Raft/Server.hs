@@ -66,11 +66,6 @@ data ServerState a b machineM = ServerState
   , _apply            :: a -> machineM b
   -- [LEADER] The current status of a new server addition, if one is being added.
   , _serverAddition   :: Maybe ServerAddition
-  -- The minimum votes required for the node to declare itself leader
-  -- We set this to 1 for the first node in the cluster, then 2 for every subsequent node.
-  -- This prevents new joiners from forming their own 1-node cluster and refusing to join
-  -- the existing one.
-  , _minVotes         :: Int
   }
 
 data ServerAddition = ServerAddition
@@ -101,8 +96,8 @@ readTimeout :: Timeout -> MonotonicCounter
 readTimeout t = MonotonicCounter (toInteger r)
   where r = fst $ randomR (low t, high t) (gen t)
 
-mkServerState :: ServerId -> [ServerId] -> Int -> (Int, Int, Int) -> MonotonicCounter -> [a] -> (a -> m b) -> ServerState a b m
-mkServerState self others minVotes (electLow, electHigh, electSeed) hbTimeout initialCommands apply = s
+mkServerState :: ServerId -> [ServerId] -> (Int, Int, Int) -> MonotonicCounter -> [a] -> (a -> m b) -> ServerState a b m
+mkServerState self others (electLow, electHigh, electSeed) hbTimeout initialCommands apply = s
   where s = ServerState { _selfId = self
                         , _serverIds = others
                         , _leaderId = Nothing
@@ -121,7 +116,6 @@ mkServerState self others minVotes (electLow, electHigh, electSeed) hbTimeout in
                         , _votesReceived = 0
                         , _apply = apply
                         , _serverAddition = Nothing
-                        , _minVotes = minVotes
                         }
         initialLogs = map (\(cmd, i) -> LogEntry { _index = i, _term = 0, _payload = LogCommand cmd, _requestId = RequestId i }) (zip initialCommands [0..(toInteger (length initialCommands))])
         initialMap = foldl' (\m sid -> Map.insert sid 0 m) Map.empty others

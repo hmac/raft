@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Wno-name-shadowing #-}
 import           Control.Monad.Logger
 import           Control.Monad.State.Strict
 import           Data.Functor.Identity
@@ -5,7 +6,6 @@ import qualified Data.HashMap.Strict        as Map
 import           Data.List                  (find, intersperse, partition,
                                              sortOn)
 import           Data.Maybe                 (fromJust, mapMaybe)
-import           Data.Word
 import           System.Random              (randomRIO)
 
 import           Raft
@@ -13,7 +13,7 @@ import           Raft.Lens                  hiding (apply)
 import           Raft.Log                   (LogEntry, LogPayload (..),
                                              ServerId (..))
 import           Raft.Rpc
-import           Raft.Server                hiding (apply)
+import           Raft.Server
 
 
 data Command =
@@ -82,6 +82,7 @@ push (Queue q) m = Queue $ sortOn (\(c, _, _) -> c) (m : q)
 -- Pop the next message from the queue
 pop :: Queue -> (ClientMessage, Queue)
 pop (Queue (m : q)) = (m, Queue q)
+pop (Queue [])      = error "cannot pop from empty queue"
 
 isEmpty :: Queue -> Bool
 isEmpty (Queue l ) = null l
@@ -97,7 +98,7 @@ testLoop s filter = go s 0
       in putStrLn $ "final states: " ++ show states
     -- client messages that are due to be sent
     go servers clock queue =
-      let ((time, sid, msg), queue') = pop queue
+      let ((time, _, _), _) = pop queue
        in if time > clock
              then go servers (clock + 1) queue
              else do
@@ -106,7 +107,7 @@ testLoop s filter = go s 0
                go servers' clock queue'
 
 runCycle :: Map.HashMap ServerId Node -> IO Bool -> Clock -> Queue -> IO (Map.HashMap ServerId Node, Queue)
-runCycle servers filter clock queue | isEmpty queue = pure (servers, queue)
+runCycle servers _filter _clock queue | isEmpty queue = pure (servers, queue)
 runCycle servers filter clock queue = do
   let ((time, sid, msg), queue') = pop queue
   if time > clock
@@ -177,12 +178,15 @@ pShow hmap =
 recipient :: Message a b -> ServerId
 recipient msg =
   case msg of
-    Tick    -> error "cannot determine recipient from Tick message"
-    CReq r  -> error "cannot determine recipient from CReq message"
     AEReq r -> r^.to
     AERes r -> r^.to
     RVReq r -> r^.to
     RVRes r -> r^.to
+    Tick    -> error "cannot determine recipient from Tick message"
+    CReq _  -> error "cannot determine recipient from CReq message"
+    CRes _  -> error "cannot determine recipient from CRes message"
+    ASReq _ -> error "cannot determine recipient from ASReq message"
+    ASRes _ -> error "cannot determine recipient from ASRes message"
 
 mkServer ::
      ServerId
@@ -198,7 +202,6 @@ mkServer serverId otherServerIds electionTimeout heartbeatTimeout apply =
       mkServerState
         serverId
         otherServerIds
-        1
         electionTimeout
         heartbeatTimeout
         [NoOp]

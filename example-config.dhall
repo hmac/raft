@@ -4,5 +4,4 @@
     , { address = "http://localhost:10502" }
     , { address = "http://localhost:10503" }
   ]
-, minNodes = 1
 }
