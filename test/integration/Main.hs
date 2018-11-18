@@ -198,7 +198,8 @@ mkServer serverId otherServerIds electionTimeout heartbeatTimeout apply =
       mkServerState
         serverId
         otherServerIds
+        1
         electionTimeout
         heartbeatTimeout
-        NoOp
+        [NoOp]
         apply

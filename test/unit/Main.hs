@@ -53,7 +53,7 @@ mkLogEntry i t = LogEntry { _index = i
 
 mkServerState :: ServerId -> [ServerId] -> Int -> MonotonicCounter -> ServerState Command () StateMachineM
 mkServerState self others electionTimeout heartbeatTimeout =
-  Raft.Server.mkServerState self others (electionTimeout, electionTimeout, 0) heartbeatTimeout NoOp apply
+  Raft.Server.mkServerState self others 1 (electionTimeout, electionTimeout, 0) heartbeatTimeout [NoOp] apply
 
 s1 :: ServerId
 s1 = ServerId "http://localhost:10501"
@@ -429,7 +429,7 @@ testAddServerReq = do
   let newServerId = ServerId "the-new-server"
 
   context "when AddServer RPC is sent" $ do
-    let msg = ASReq AddServerReq { _newServer = newServerId }
+    let msg = ASReq AddServerReq { _newServer = newServerId, _requestId = 1 }
         (msgs, node') = sendMsg node msg
     it "starts a server addition" $ do
       let addition = fromJust $ node'^.serverAddition
