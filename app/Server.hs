@@ -54,8 +54,10 @@ logState Config { state } = do
 processMessage :: Config -> Message -> LoggingT IO ()
 processMessage Config { state, queue } msg = do
   case msg of
-    Raft.Tick -> pure ()
-    m         -> (logInfoN . T.pack . show) m
+    Raft.Tick    -> pure ()
+    Raft.AEReq _ -> pure ()
+    Raft.AERes _ -> pure ()
+    m            -> (logInfoN . T.pack . show) m
   logs <- liftIO . atomically $ do
     (s, m) <- readTVar state
     (((msgs, s'), m'), logs) <- runWriterLoggingT (handleMessage_ s m msg)

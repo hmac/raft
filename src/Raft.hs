@@ -107,11 +107,11 @@ handleAppendEntriesReq fromAddr toAddr r = do
 checkForNewTerm :: MonadLogger m => Term -> ServerT a b m ()
 checkForNewTerm rpcTerm = do
   currentTerm <- use serverTerm
-  notFollower <- (/= Follower) <$> use role
+  leaderOrCandidate <- (\r -> r == Leader || r == Candidate) <$> use role
   when (rpcTerm > currentTerm) $ do
     logInfoN $ T.pack $ "Received RPC with term " ++ (show . unTerm) rpcTerm ++ " > current term " ++ (show . unTerm) currentTerm
     serverTerm .= rpcTerm
-    when notFollower convertToFollower
+    when leaderOrCandidate convertToFollower
 
 handleAppendEntriesRes :: MonadLogger m => ServerId -> ServerId -> AppendEntriesRes -> ServerT a b m ()
 handleAppendEntriesRes fromAddr toAddr r = do
@@ -160,21 +160,24 @@ handleCatchupAppendEntriesRes fromAddr toAddr r addition = do
     nextIndex %= Map.delete fromAddr
     matchIndex %= Map.delete fromAddr
     tell1 $ ASRes AddServerRes { _leaderHint = Just toAddr, _status = AddServerTimeout, _requestId = addition^.requestId }
-  else do
+  else
     -- check for round completion
     if addition^.roundIndex == r^.logIndex
-    then do
+    then
       -- if completed round lasted less than election timeout, complete addition by
-      -- adding the server to the cluster (this involves creating a configuration log
-      -- entry and appending it to the log).
+      -- adding the server to the cluster.
       if addition^.roundTimer < eTimeout
       then do
         logInfoN "New server has caught up - adding it to the cluster"
-        logInfoN "NOTE: Cluster configuration changes not yet supported, so actually doing nothing here"
         currentConfig <- getClusterConfig
+        -- First, update our own knowledge of the cluster
+        serverIds %= (++ [fromAddr])
+        -- Then save the configuration to the log and broadcast it to all nodes (including
+        -- the new one)
         -- TODO: we should get the request ID from the original AddServer request
-        entry <- mkLogEntry (LogConfig (fromAddr : currentConfig)) 1
-        entryLog %= \l -> l ++ [entry]
+        appendLogEntry (LogConfig (fromAddr : currentConfig)) 1
+        logInfoN "Completing server addition"
+        serverAddition .= Nothing
         pure ()
       else do
         -- start new round
@@ -189,18 +192,23 @@ handleCatchupAppendEntriesRes fromAddr toAddr r addition = do
                                          }
         sendAppendEntries fromAddr (r^.logIndex + 1)
     else
+      -- TODO: why is this commented out?
       -- (roundTimer . addition) += 1
       sendAppendEntries fromAddr (r^.logIndex + 1)
 
-mkLogEntry :: MonadLogger m => LogPayload a -> RequestId -> ServerT a b m (LogEntry a)
-mkLogEntry entryPayload reqId = do
+appendLogEntry :: MonadLogger m => LogPayload a -> RequestId -> ServerT a b m ()
+appendLogEntry entryPayload reqId = do
   log <- use entryLog
   currentTerm <- use serverTerm
-  pure $ LogEntry { _index = toInteger (length log)
-                  , _term = currentTerm
-                  , _payload = entryPayload
-                  , _requestId = reqId
-                  }
+  let entryLogIndex = toInteger (length log)
+      entry = LogEntry { _index = entryLogIndex
+                       , _term = currentTerm
+                       , _payload = entryPayload
+                       , _requestId = reqId
+                       }
+  entryLog %= \l -> l ++ [entry]
+  sids <- use serverIds
+  mapM_ (`sendAppendEntries` entryLogIndex) sids
 
 getClusterConfig :: MonadLogger m => ServerT a b m [ServerId]
 getClusterConfig = do
@@ -245,14 +253,7 @@ handleClientRequest r = do
   case (currentRole, leaderAddr) of
     (Leader, _) -> do
       logInfoN "responding to client request"
-      log <- use entryLog
-      currentTerm <- use serverTerm
-      let nextLogIndex = toInteger $ length log
-          entry = LogEntry { _index = nextLogIndex , _term = currentTerm , _payload = LogCommand c , _requestId = reqId}
-      entryLog %= \l -> l ++ [entry]
-      -- broadcast this new entry to followers
-      sids <- use serverIds
-      mapM_ (`sendAppendEntries` nextLogIndex) sids
+      appendLogEntry (LogCommand c) reqId
       -- Shortcut for when we're the only node in the cluster
       checkCommitIndex
       applyCommittedLogEntries
@@ -303,7 +304,10 @@ applyClusterConfigChange sids = do
   self <- use selfId
   let others = filter (/= self) sids
   serverIds .= others
-  pure ()
+  -- If we're currently in bootstrap mode and this change adds us to the cluster, convert
+  -- to a follwer
+  r <- use role
+  when (r == Bootstrap && self `elem` sids) convertToFollower
 
 validateAppendEntries :: Term -> Log a -> AppendEntriesReq a -> Either Text ()
 validateAppendEntries currentTerm log rpc =
