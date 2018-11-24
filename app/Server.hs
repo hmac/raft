@@ -33,7 +33,6 @@ import           Raft.Server                   (MonotonicCounter (..),
                                                 ServerState (..), mkServerState)
 
 import           Api
-import           Config
 
 type StateMachineM = StateMachineT (LoggingT IO)
 type RaftServer = ServerState Command CommandResponse (StateMachineT (WriterLoggingT STM))
@@ -141,8 +140,8 @@ serveClientRequest config req = liftIO $ runLogger $ do
       pure r
     _ -> error "No response found"
 
-runServer :: String -> Bool -> ClusterConfig -> IO ()
-runServer selfAddr bootstrap _ = do
+runServer :: String -> Bool -> IO ()
+runServer selfAddr bootstrap = do
   self <- parseBaseUrl selfAddr
   -- TODO: remove?
   -- others <- map (ServerId . showBaseUrl) . filter (/= self) <$> mapM (parseBaseUrl . address) (nodes config)

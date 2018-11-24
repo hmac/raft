@@ -55,7 +55,6 @@ executables:
     - http-client
     - time
     - optparse-applicative
-    - dhall
     - stm
     - stm-chans
 

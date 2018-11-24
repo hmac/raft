@@ -6,12 +6,10 @@ import           Server
 
 import qualified Api                 (Command (..))
 import qualified Client              (Command (..))
-import           Config
 import           Raft.Log            (ServerId (ServerId))
 
 data Options
   = ServerOpts String
-               String
                Bool -- ^ start in bootstrap mode?
   | ClientOpts String
                Client.Command
@@ -20,8 +18,8 @@ main :: IO ()
 main = do
   args <- execParser options
   case args of
-    ServerOpts name configPath bootstrap -> parseConfig configPath >>= runServer name bootstrap
-    ClientOpts name cmd        -> runClient name cmd
+    ServerOpts name bootstrap -> runServer name bootstrap
+    ClientOpts name cmd       -> runClient name cmd
 
 options :: ParserInfo Options
 options = info parser $ fullDesc
@@ -34,7 +32,6 @@ parser = hsubparser $ command "server" (info serverOptions (progDesc "Start the 
 
 serverOptions :: Parser Options
 serverOptions = ServerOpts <$> strArgument (metavar "[address]")
-                           <*> strArgument (metavar "[path to config file]")
                            <*> flag False True (long "bootstrap" <> help "Start in bootstrap mode")
 
 clientOptions :: Parser Options

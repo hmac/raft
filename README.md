@@ -87,27 +87,47 @@ There's an example app that uses HTTP as the transport and a HashMap as the
 state machine.  You'll need [Stack](https://haskellstack.org) installed to run
 it.
 
-Build the project
+0. Build the project
 ```shell
 stack build
 ```
 
-Start three nodes, each in their own shell:
+Bootstrap a cluster by starting a leader node, then further nodes one at a time.
+
+1. Launch the leader.
 ```shell
-stack exec http server localhost:10501 ./example-config.dhall
-stack exec http server localhost:10502 ./example-config.dhall
-stack exec http server localhost:10503 ./example-config.dhall
+stack exec raft server localhost:3001
 ```
 
-Set a value on the state machine
-```shell
-stack exec http client localhost:10501 set name harry
+2. In a separate shell, launch a second node in bootstrap mode.
+```
+stack exec raft server localhost:3002 -- --boostrap
 ```
 
-Read it back
-```shell
-stack exec http client localhost:10501 get name
+3. Add this node to the cluster.
 ```
+stack exec raft client localhost:3001 add-server localhost:3002
+```
+
+4. Repeat with a third node
+```
+stack exec raft server localhost:3002 -- --boostrap
+stack exec raft client localhost:3001 add-server localhost:3002
+```
+
+5. Set a value on the state machine
+```shell
+stack exec raft client localhost:3001 set name harry
+```
+
+6. Read it back
+```shell
+stack exec raft client localhost:3001 get name
+```
+
+Try killing nodes with CTRL-C and see how the cluster behaves. You should be able to read
+and write values provided a majority of nodes are up. When you bring back killed nodes,
+they should rejoin the cluster seamlessly.
 
 --
 
