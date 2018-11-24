@@ -175,7 +175,8 @@ handleCatchupAppendEntriesRes fromAddr toAddr r addition = do
         -- Then save the configuration to the log and broadcast it to all nodes (including
         -- the new one)
         -- TODO: we should get the request ID from the original AddServer request
-        appendLogEntry (LogConfig (fromAddr : currentConfig)) 1
+        appendLogEntry (LogConfig (fromAddr : currentConfig)) (addition^.requestId)
+        tell1 $ ASRes AddServerRes { _leaderHint = Just toAddr, _status = AddServerOk, _requestId = addition^.requestId }
         logInfoN "Completing server addition"
         serverAddition .= Nothing
         pure ()
